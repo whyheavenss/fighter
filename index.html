@@ -2,201 +2,215 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>VR Кибер-Истребитель 2026</title>
+    <title>Meta Quest 3: Advanced Jet Fighter</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <style>
-      /* Кнопка для раскрытия на весь экран */
-      #fullscreen-btn {
+      #vr-btn-overlay {
         position: absolute;
-        top: 20px;
-        left: 20px;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
         z-index: 9999;
-        padding: 12px 24px;
-        background: #00ffca;
-        color: #000;
-        border: none;
-        border-radius: 8px;
-        font-family: sans-serif;
+        padding: 15px 30px;
+        background: #ff0055;
+        color: #fff;
+        border: 2px solid #fff;
+        border-radius: 30px;
+        font-family: monospace;
+        font-size: 18px;
         font-weight: bold;
         cursor: pointer;
-        box-shadow: 0 0 15px #00ffca;
+        box-shadow: 0 0 20px #ff0055;
       }
-      #fullscreen-btn:hover { background: #fff; }
     </style>
   </head>
   <body>
 
-    <button id="fullscreen-btn" onclick="goFullscreen()">ИГРАТЬ НА ВЕСЬ ЭКРАН</button>
+    <button id="vr-btn-overlay" onclick="document.querySelector('a-scene').enterVR()">ВОЙТИ В VR (QUEST 3)</button>
 
     <script>
       let score = 0;
-      let speed = 0.5; 
+      let speed = 0.6;
       let enemies = [];
 
-      function goFullscreen() {
-        let elem = document.documentElement;
-        if (elem.requestFullscreen) { elem.requestFullscreen(); }
-        document.getElementById('fullscreen-btn').style.display = 'none';
-      }
-
-      // Главная логика
-      AFRAME.registerComponent('flight-control', {
+      // Компонент управления полетом через контроллер Quest 3
+      AFRAME.registerComponent('quest-flight-system', {
         init: function () {
-          this.player = document.querySelector('#jet');
-          this.camera = document.querySelector('#cam');
-          this.joystick = document.querySelector('#jstick');
-          this.hand = document.querySelector('#pilot-hand');
-          this.scoreText = document.querySelector('#score-txt');
+          this.player = document.querySelector('#space-jet');
+          this.rightController = document.querySelector('#right-hand');
+          this.scoreText = document.querySelector('#score-display');
+          
+          // Логика стрельбы с курка контроллера Quest
+          this.rightController.addEventListener('triggerdown', () => { this.fireLasers(); });
+          // Стрельба для теста на ПК (клик мыши)
+          window.addEventListener('click', () => { if(!this.el.sceneEl.is('vr-mode')) this.fireLasers(); });
 
-          // Стрельба на клик или триггер
-          window.addEventListener('click', () => { this.shoot(); });
-          window.addEventListener('triggerdown', () => { this.shoot(); });
-
-          // Создаем 5 врагов сразу внутри кода (без внешних ссылок!)
-          for (let i = 0; i < 5; i++) { this.spawnEnemy(i); }
+          // Спавним нормальных врагов подальше
+          for (let i = 0; i < 6; i++) { this.createEnemy(i); }
         },
 
-        tick: function (time, timeDelta) {
-          let pos = this.player.getAttribute('position');
-          pos.z -= speed;
-          this.player.setAttribute('position', pos);
+        tick: function () {
+          // 1. Постоянное движение истребителя вперед в 3D пространстве
+          let currentPos = this.player.getAttribute('position');
+          currentPos.z -= speed;
+          this.player.setAttribute('position', currentPos);
 
-          // Управление наклоном от взгляда
-          let camRot = this.camera.getAttribute('rotation');
-          let jetRot = this.player.getAttribute('rotation');
+          // 2. Считываем наклон правого контроллера Quest (Джойстика)
+          let ctrlRotation = this.rightController.getAttribute('rotation');
+          let currentRot = this.player.getAttribute('rotation');
 
-          jetRot.z = -camRot.y * 2; 
-          jetRot.x = camRot.x;
-          jetRot.y = camRot.y;
-          this.player.setAttribute('rotation', jetRot);
+          if (this.el.sceneEl.is('vr-mode') && ctrlRotation) {
+            // МЕТА КВЕСТ 3 УПРАВЛЕНИЕ:
+            // Наклон контроллера по X (вверх/вниз) управляет тангажом самолета
+            currentRot.x += (ctrlRotation.x * 0.02);
+            // Наклон контроллера по Z (влево/вправо) делает крен и поворот
+            currentRot.y -= (ctrlRotation.z * 0.02);
+            currentRot.z = -ctrlRotation.z * 1.5; // Визуальный занос крыла
+            
+            // Ограничители, чтобы самолет не сделал мертвую петлю случайно
+            currentRot.x = Math.max(-45, Math.min(45, currentRot.x));
+            this.player.setAttribute('rotation', currentRot);
+          } else {
+            // Запасной режим для ПК (управление от мышки/камеры)
+            let camRot = document.querySelector('#cam-eyes').getAttribute('rotation');
+            this.player.setAttribute('rotation', {x: camRot.x, y: camRot.y, z: -camRot.y * 2});
+          }
 
-          // Двигаем джойстик и руку в кабине
-          this.joystick.setAttribute('rotation', {x: -camRot.x, y: 0, z: -camRot.y * 2});
-          this.hand.setAttribute('position', {
-            x: 0.2 + (-camRot.y * 0.005),
-            y: -0.4 + (camRot.x * 0.003),
-            z: -0.4
-          });
-
-          // Движение врагов навстречу
+          // 3. Логика цикличного полета врагов
           enemies.forEach(enemy => {
             let ePos = enemy.getAttribute('position');
-            if (ePos.z > pos.z + 10) {
-              ePos.z = pos.z - 100;
-              ePos.x = (Math.random() * 80) - 40;
-              ePos.y = (Math.random() * 30) + 5;
+            // Если игрок пролетел мимо врага, перекидываем врага снова вперед
+            if (ePos.z > currentPos.z + 20) {
+              ePos.z = currentPos.z - 150 - (Math.random() * 50);
+              ePos.x = currentPos.x + (Math.random() * 100) - 50;
+              ePos.y = currentPos.y + (Math.random() * 40) - 10;
               enemy.setAttribute('position', ePos);
               enemy.setAttribute('visible', true);
-              enemy.classList.add('target');
+              enemy.classList.add('enemy-target');
             }
           });
         },
 
-        shoot: function () {
+        fireLasers: function () {
           let pPos = this.player.getAttribute('position');
           let pRot = this.player.getAttribute('rotation');
 
-          // Создаем два лазерных луча
-          const makeLaser = (xOffset) => {
-            let laser = document.createElement('a-cylinder');
-            laser.setAttribute('radius', 0.05);
-            laser.setAttribute('height', 6);
-            laser.setAttribute('material', {color: '#ff0055', shader: 'flat'});
-            laser.setAttribute('position', {x: pPos.x + xOffset, y: pPos.y - 0.2, z: pPos.z - 2});
-            laser.setAttribute('rotation', {x: 90, y: pRot.y, z: 0});
+          // Функция генерации вспышек лазера из пушек
+          const spawnLaserBeam = (sideOffset) => {
+            let laser = document.createElement('a-box');
+            laser.setAttribute('width', 0.08);
+            laser.setAttribute('height', 0.08);
+            laser.setAttribute('depth', 8);
+            laser.setAttribute('material', {color: '#00ffff', shader: 'flat', emissive: '#00ffff'});
+            
+            // Позиция пушки на крыле
+            laser.setAttribute('position', {x: pPos.x + sideOffset, y: pPos.y - 0.3, z: pPos.z - 3});
+            laser.setAttribute('rotation', {x: pRot.x, y: pRot.y, z: 0});
+            
+            // Летит вперед по траектории истребителя
             laser.setAttribute('animation', {
               property: 'position',
-              to: `${pPos.x + xOffset} ${pPos.y} ${pPos.z - 150}`,
-              dur: 400,
+              to: `${pPos.x + (sideOffset * 5)} ${pPos.y + (pRot.x * 0.5)} ${pPos.z - 200}`,
+              dur: 350,
               easing: 'linear'
             });
+
             document.querySelector('a-scene').appendChild(laser);
-            setTimeout(() => { laser.remove(); }, 400);
+            setTimeout(() => { laser.remove(); }, 350);
           };
 
-          makeLaser(-1.5); makeLaser(1.5);
+          spawnLaserBeam(-2); // Левая пушка
+          spawnLaserBeam(2);  // Правая пушка
 
-          // Проверка попадания
-          let ray = document.querySelector('#laser-pointer').components.raycaster;
-          let hit = ray.getIntersection(document.querySelectorAll('.target'));
+          // Проверка попадания (Raycast по вектору направления самолета)
+          let raycaster = document.querySelector('#hud-reticle').components.raycaster;
+          let hit = raycaster.getIntersection(document.querySelectorAll('.enemy-target'));
           
           if (hit) {
-            let targetEl = hit.el;
-            targetEl.setAttribute('visible', false);
-            targetEl.classList.remove('target');
+            let sbiytiyDrone = hit.el;
+            sbiytiyDrone.setAttribute('visible', false);
+            sbiytiyDrone.classList.remove('enemy-target');
+            
             score += 100;
             this.scoreText.setAttribute('value', `SCORE: ${score}`);
           }
         },
 
-        spawnEnemy: function (i) {
-          let enemy = document.createElement('a-entity');
-          // Красивый футуристичный вражеский дрон из полигонов
-          enemy.setAttribute('geometry', {primitive: 'cone', radiusBottom: 1.5, height: 4});
-          enemy.setAttribute('material', {color: '#ff0055', metalness: 0.8, roughness: 0.2});
-          enemy.setAttribute('rotation', {x: 90, y: 0, z: 0});
+        createEnemy: function (i) {
+          // Собираем полноценный вражеский корабль из базовых геометрических фигур (он не зависнет)
+          let enemyContainer = document.createElement('a-entity');
           
-          let pPos = this.player.getAttribute('position') || {x:0, y:0, z:25};
-          enemy.setAttribute('position', {
-            x: (Math.random() * 60) - 30,
-            y: (Math.random() * 20) + 10,
-            z: pPos.z - (60 + (i * 20))
+          // Фюзеляж врага
+          let body = document.createElement('a-cone');
+          body.setAttribute('radius-bottom', 1);
+          body.setAttribute('height', 4);
+          body.setAttribute('rotation', {x: 90, y: 0, z: 0});
+          body.setAttribute('material', {color: '#ff0055', metalness: 0.7, roughness: 0.3});
+          enemyContainer.appendChild(body);
+
+          // Крылья врага
+          let wings = document.createElement('a-box');
+          wings.setAttribute('width', 5);
+          wings.setAttribute('height', 0.1);
+          wings.setAttribute('depth', 1);
+          wings.setAttribute('material', {color: '#aa0033'});
+          enemyContainer.appendChild(wings);
+
+          let pPos = this.player.getAttribute('position') || {x:0, y:20, z:0};
+          enemyContainer.setAttribute('position', {
+            x: (Math.random() * 80) - 40,
+            y: (Math.random() * 30) + 5,
+            z: pPos.z - (80 + (i * 30))
           });
-          
-          enemy.classList.add('target');
-          document.querySelector('a-scene').appendChild(enemy);
-          enemies.push(enemy);
+
+          enemyContainer.classList.add('enemy-target');
+          document.querySelector('a-scene').appendChild(enemyContainer);
+          enemies.push(enemyContainer);
         }
       });
     </script>
 
-    <a-scene flight-control vr-mode-ui="enabled: true">
+    <a-scene quest-flight-system vr-mode-ui="enabled: true; enterVRBtn: #vr-btn-overlay" webxr="referenceSpaceType: local; requiredFeatures: local-floor">
       
-      <a-sky color="#0a051b"></a-sky>
-      <a-light type="ambient" color="#fff"></a-light>
+      <a-sky color="#03020a"></a-sky>
+      
+      <a-text value="* .  * .  .  * .  * .  *" position="-20 40 -50" color="#fff" scale="5 5 5"></a-text>
+      <a-text value=".  * .  * .  * .  .  * ." position="20 20 -80" color="#fff" scale="5 5 5"></a-text>
 
-      <a-grid width="10000" height="10000" material="color: #110933; gridColor: #00ffca; opacity: 0.6" rotation="-90 0 0"></a-grid>
+      <a-entity environment="preset: moonlight; groundColor: #090514; gridColor: #ff0055; grid: cross; dressingAmount: 0; lighting: point"></a-entity>
+      <a-grid width="5000" height="5000" position="0 0 0" material="color: #070212; gridColor: #00ffcc; opacity: 0.8"></a-grid>
 
-      <a-entity id="jet" position="0 20 0">
+      <a-entity id="space-jet" position="0 25 0">
         
-        <a-camera id="cam" look-controls wasd-controls-enabled="false" near="0.1">
+        <a-camera id="cam-eyes" look-controls wasd-controls-enabled="false" near="0.05">
           
-          <a-cylinder position="0 0.2 -0.5" radius="1.2" height="1.5" rotation="90 0 0" material="color: #00ffca; opacity: 0.1; transparent: true; wireframe: false" scale="1 1 0.5"></a-cylinder>
+          <a-entity id="cockpit-glass" geometry="primitive: sphere; radius: 2; phiLength: 180" material="color: #00ffcc; opacity: 0.08; transparent: true; wireframe: true" position="0 0.2 0" rotation="0 90 0"></a-entity>
           
-          <a-box position="0 -0.5 -0.6" width="1.4" height="0.4" depth="0.5" color="#0d0d1a">
-            <a-plane position="0 0.11 0.26" rotation="-20 0 0" width="0.3" height="0.15" color="#00ffca" material="opacity: 0.2"></a-plane>
+          <a-box position="0 -0.5 -0.5" width="1.2" height="0.4" depth="0.4" color="#0a0a10">
+            <a-circle position="0 0.11 0.21" radius="0.12" color="#00ffcc" material="opacity: 0.3; shader: flat"></a-circle>
           </a-box>
 
-          <a-entity position="0 0 -1.2">
-            <a-text id="score-txt" value="SCORE: 0" position="-0.4 0.4 0" color="#00ffca" width="2"></a-text>
-            <a-text value="SPEED: MACH 1.5\nGEAR: UP" position="0.15 -0.3 0" color="#00ffca" width="1.2"></a-text>
-            
-            <a-entity id="laser-pointer" raycaster="objects: .target; far: 150">
-              <a-ring radius-inner="0.05" radius-outer="0.06" color="#00ffca" material="shader: flat"></a-ring>
-              <a-circle radius="0.005" color="#00ffca" material="shader: flat"></a-circle>
+          <a-entity position="0 0 -1">
+            <a-entity id="hud-reticle" raycaster="objects: .enemy-target; far: 200">
+              <a-ring radius-inner="0.04" radius-outer="0.045" color="#00ffcc" material="shader: flat"></a-ring>
+              <a-circle radius="0.003" color="#00ffcc" material="shader: flat"></a-circle>
             </a-entity>
-          </a-entity>
 
-          <a-entity id="jstick" position="0 -0.4 -0.4">
-            <a-cylinder radius="0.02" height="0.3" color="#1a1a3a" rotation="0 0 0" position="0 0.15 0"></a-cylinder>
-            <a-sphere radius="0.04" color="#ff0055" position="0 0.3 0"></a-sphere>
-          </a-entity>
-
-          <a-entity id="pilot-hand" position="0.2 -0.4 -0.4">
-            <a-box width="0.08" height="0.08" depth="0.3" color="#1a1a3a" rotation="15 0 0"></a-box>
-            <a-sphere radius="0.05" color="#ff0055" position="0 0 0.15"></a-sphere>
+            <a-text value="ALT: 2500m\nMACH: 2.1" position="0.15 -0.2 0" color="#00ffcc" width="1"></a-text>
+            <a-text id="score-display" value="SCORE: 0" position="-0.35 0.3 0" color="#00ffcc" width="1.2"></a-text>
           </a-entity>
 
         </a-camera>
 
-        <a-box position="-2.5 -0.2 -1" width="3" height="0.05" depth="1.5" color="#0d0d1a" rotation="0 -20 5"></a-box>
-        <a-box position="2.5 -0.2 -1" width="3" height="0.05" depth="1.5" color="#0d0d1a" rotation="0 20 -5"></a-box>
+        <a-box position="-2.2 -0.3 -0.5" width="2.5" height="0.04" depth="1.2" color="#0e0f14" rotation="0 -15 5"></a-box>
+        <a-box position="2.2 -0.3 -0.5" width="2.5" height="0.04" depth="1.2" color="#0e0f14" rotation="0 15 -5"></a-box>
 
       </a-entity>
 
-      <a-entity laser-controls="hand: right"></a-entity>
-      <a-entity laser-controls="hand: left"></a-entity>
+      <a-entity id="right-hand" oculus-touch-controls="hand: right"></a-entity>
+      <a-entity id="left-hand" oculus-touch-controls="hand: left"></a-entity>
 
     </a-scene>
+
   </body>
 </html>
