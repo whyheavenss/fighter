@@ -2,47 +2,45 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Quest 3: Air Defense Advanced VR</title>
+    <title>ПВО Симулятор 2026: Защита Заводов</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #0d0116; }
+        body { margin: 0; overflow: hidden; background-color: #05020c; }
         #vr-button {
             position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
-            padding: 15px 30px; background: #ffe600; color: black; border: 3px solid black;
-            border-radius: 12px; font-family: monospace; font-size: 20px; font-weight: bold; cursor: pointer; z-index: 999;
-            box-shadow: 0 0 20px #ffe600;
+            padding: 15px 35px; background: #00ff66; color: black; border: 3px solid #fff;
+            border-radius: 8px; font-family: monospace; font-size: 22px; font-weight: bold; cursor: pointer; z-index: 999;
+            box-shadow: 0 0 25px #00ff66;
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
-    <button id="vr-button">НАЧАТЬ ПЕРЕХВАТ (VR)</button>
+    <button id="vr-button">ЗАПУСТИТЬ ПЕРЕХВАТЧИК</button>
 
     <script>
         let scene, camera, renderer;
-        let jet, runway, joystick, joystickBase;
+        let jet, joystickBase, joystick;
         let speed = 0, isAirborne = false;
-        let shaheds = [], bullets = [], mountains = [];
-        let score = 0;
+        let shaheds = [], bullets = [], targets = [];
+        let score = 0, factoryHealth = 100;
         
         let controllerRight;
-        let isHoldingJoystick = false; // Состояние: держим ли мы штурвал рукой
-        let handMesh;
+        let isHoldingJoystick = false;
 
         function init() {
             scene = new THREE.Scene();
-            // Яркое закатное небо
-            scene.background = new THREE.Color(0x3a1c4d); 
-            scene.fog = new THREE.FogExp2(0x4a1e5c, 0.003); // Атмосферный туман каньона
+            scene.background = new THREE.Color(0x140e28); // Мрачное предрассветное небо ПВО
+            scene.fog = new THREE.FogExp2(0x140e28, 0.002);
 
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1500);
             
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            // Кнопка входа в VR
+            // Кнопка VR
             const vrBtn = document.getElementById('vr-button');
             vrBtn.addEventListener('click', () => {
                 navigator.xr.requestSession('immersive-vr', { requiredFeatures: ['local-floor'] }).then((session) => {
@@ -51,236 +49,245 @@
                 });
             });
 
-            // Свет (Сочный, закатный)
-            const ambientLight = new THREE.AmbientLight(0xffaa66, 0.5);
-            scene.add(ambientLight);
-            const sunLight = new THREE.DirectionalLight(0xff5500, 1.2);
-            sunLight.position.set(50, 100, -50);
-            scene.add(sunLight);
+            // Освещение
+            scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+            const light = new THREE.DirectionalLight(0xffddaa, 1.0);
+            light.position.set(100, 200, 50);
+            scene.add(light);
 
-            // ЗЕМЛЯ И КАНЬОН
-            const groundGeo = new THREE.PlaneGeometry(5000, 5000);
-            const groundMat = new THREE.MeshLambertMaterial({ color: 0x4a2c11 }); // Оранжево-коричневая пустыня
-            const ground = new THREE.Mesh(groundGeo, groundMat);
+            // Земля (Ландшафт)
+            const ground = new THREE.Mesh(
+                new THREE.PlaneGeometry(6000, 6000, 8, 8),
+                new THREE.MeshLambertMaterial({ color: 0x1e251c, wireframe: false })
+            );
             ground.rotation.x = -Math.PI / 2;
             scene.add(ground);
 
-            // ГЕНЕРАЦИЯ СКАЛ И ГОР КАНЬОНА (Чтобы карта не была скучной)
-            for (let i = 0; i < 40; i++) {
-                let mGeo = new THREE.ConeGeometry(30 + Math.random()*40, 60 + Math.random()*80, 4);
-                let mMat = new THREE.MeshLambertMaterial({ color: 0x6e3415 }); // Красные скалы
-                let mountain = new THREE.Mesh(mGeo, mMat);
+            // 🏭 СОЗДАЕМ ИНДУСТРИАЛЬНЫЕ ОБЪЕКТЫ (ЗАВОДЫ И СТАНЦИИ)
+            for (let i = 0; i < 5; i++) {
+                let factoryGroup = new THREE.Group();
                 
-                mountain.position.set(
-                    (Math.random() < 0.5 ? -1 : 1) * (60 + Math.random()*200), 
-                    20, 
-                    -Math.random() * 2000
-                );
-                scene.add(mountain);
-                mountains.push(mountain);
+                // Главный цех завода
+                let hangar = new THREE.Mesh(new THREE.BoxGeometry(40, 15, 60), new THREE.MeshLambertMaterial({color: 0x55555f}));
+                hangar.position.y = 7.5;
+                factoryGroup.add(hangar);
+
+                // Высокая дымовая труба ТЭЦ
+                let chimney = new THREE.Mesh(new THREE.CylinderGeometry(2, 3, 40), new THREE.MeshLambertMaterial({color: 0x773333}));
+                chimney.position.set(15, 20, -20);
+                factoryGroup.add(chimney);
+
+                // Огонек на трубе
+                let redLight = new THREE.Mesh(new THREE.SphereGeometry(0.5), new THREE.MeshBasicMaterial({color: 0xff0000}));
+                redLight.position.set(15, 40, -20);
+                factoryGroup.add(redLight);
+
+                // Расставляем заводы вдоль курса полета
+                factoryGroup.position.set((i - 2) * 180, 0, -600 - (Math.random() * 300));
+                scene.add(factoryGroup);
+                targets.push(factoryGroup); // Шахеды будут лететь сюда
             }
 
-            // ВЗЛЕТНАЯ ПОЛОСА С СИГНАЛЬНЫМИ ОГНЯМИ
-            const runwayGeo = new THREE.BoxGeometry(24, 0.1, 800);
-            const runwayMat = new THREE.MeshLambertMaterial({ color: 0x222225 });
-            runway = new THREE.Mesh(runwayGeo, runwayMat);
-            runway.position.set(0, 0.05, -350);
+            // ВЗЛЕТНАЯ ПОЛОСА ПВО
+            runway = new THREE.Mesh(new THREE.BoxGeometry(30, 0.2, 1000), new THREE.MeshLambertMaterial({ color: 0x282828 }));
+            runway.position.set(0, 0.1, -450);
             scene.add(runway);
 
-            // Огни взлетки (Неоновые точки по краям)
-            for (let z = 0; z > -750; z -= 40) {
-                let lightL = new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshBasicMaterial({color: 0x00ff00}));
-                lightL.position.set(-12, 0.2, z);
-                scene.add(lightL);
-                let lightR = new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshBasicMaterial({color: 0xff0000}));
-                lightR.position.set(12, 0.2, z);
-                scene.add(lightR);
-            }
-
-            // ИСТРЕБИТЕЛЬ ПИЛОТА
+            // ИСТРЕБИТЕЛЬ С КАБИНОЙ
             jet = new THREE.Group();
-            jet.position.set(0, 0, 0); // Старт на бетонке
+            jet.position.set(0, 0, 0); // Старт на ВПП
             scene.add(jet);
 
-            // Кабина (Фонарь самолета)
+            // Каркас кабины (Стекло)
             const glass = new THREE.Mesh(
-                new THREE.SphereGeometry(2.2, 16, 16),
-                new THREE.MeshBasicMaterial({ color: 0x00ffaa, wireframe: true, opacity: 0.04, transparent: true })
+                new THREE.SphereGeometry(2.5, 16, 16),
+                new THREE.MeshBasicMaterial({ color: 0x33ff33, wireframe: true, opacity: 0.03, transparent: true })
             );
             jet.add(glass);
 
-            // Приборное торпедо перед пилотом
-            const dash = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 0.4), new THREE.MeshLambertMaterial({color: 0x111115}));
-            dash.position.set(0, -0.4, -0.7);
-            jet.add(dash);
+            // Авиационная панель приборов
+            const panel = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.6, 0.5), new THREE.MeshLambertMaterial({color: 0x1c1d22}));
+            panel.position.set(0, -0.3, -0.8);
+            jet.add(panel);
 
-            // 🕹 ПОДНЯТЫЙ ИСТРУБИТЕЛЬНЫЙ ШТУРВАЛ (РУС)
+            // 🕹 ИСПРАВЛЕННЫЙ ШТУРВАЛ (РУС) — СТАЛ ВЫШЕ И УДОБНЕЕ
             joystickBase = new THREE.Group();
-            joystickBase.position.set(0, -0.15, -0.45); // Подняли ВЫШЕ и выдвинули к пилоту
+            joystickBase.position.set(0, 0.05, -0.5); // Подняли в зону прямой видимости груди пилота
             jet.add(joystickBase);
 
-            const stickGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.45);
-            const stickMat = new THREE.MeshLambertMaterial({ color: 0x222225 });
-            const stick = new THREE.Mesh(stickGeo, stickMat);
-            stick.position.y = 0.22;
+            const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.02, 0.5), new THREE.MeshLambertMaterial({ color: 0x333339 }));
+            stick.position.y = 0.25;
             joystickBase.add(stick);
 
-            const knobGeo = new THREE.SphereGeometry(0.045);
-            const knobMat = new THREE.MeshLambertMaterial({ color: 0xd90429 }); // Красная боевая ручка штурвала
-            joystick = new THREE.Mesh(knobGeo, knobMat);
-            joystick.position.y = 0.45;
+            joystick = new THREE.Mesh(new THREE.SphereGeometry(0.05), new THREE.MeshLambertMaterial({ color: 0xcc0000 }));
+            joystick.position.y = 0.5;
             joystickBase.add(joystick);
 
-            // Камера залочена в кабине
+            // Камера пилота
             jet.add(camera);
-            camera.position.set(0, 0.5, 0);
+            camera.position.set(0, 0.6, 0);
 
-            // 🎮 ПОДКЛЮЧЕНИЕ ПРАВОЙ РУКИ QUEST 3
+            // 🎮 КВЕСТ 3: НАСТРОЙКА КОНТРОЛЛЕРОВ
             controllerRight = renderer.xr.getController(0);
             
-            // Событие GRIP: Взять / Отпустить штурвал руками
+            // МАГНИТНЫЙ ЗАХВАТ: Жмем Grip — штурвал автоматически в руке!
             controllerRight.addEventListener('gripdown', () => {
-                // Проверяем дистанцию: близко ли контроллер к ручке штурвала
-                let handPos = new THREE.Vector3();
-                controllerRight.getBoundingBoxCenter(handPos); // Получаем позицию руки в VR
-                
-                let stickWorldPos = new THREE.Vector3();
-                joystick.getWorldPosition(stickWorldPos);
-
-                // Если рука рядом с рычагом — берем его!
-                if(handPos.distanceTo(stickWorldPos) < 0.6) {
-                    isHoldingJoystick = true;
-                }
+                isHoldingJoystick = true;
             });
             controllerRight.addEventListener('gripup', () => {
-                isHoldingJoystick = false; // Отпустили рычаг
-                joystickBase.rotation.set(0, 0, 0); // Он встал ровно
+                isHoldingJoystick = false;
+                joystickBase.rotation.set(0, 0, 0);
             });
 
-            // Событие TRIGGER: Стрельба на ПЕРЕДНЮЮ кнопку (курок)
+            // СТРЕЛЬБА НА КУРОК (TRIGGER) НА ПРАВОМ КОНТРОЛЛЕРЕ
             controllerRight.addEventListener('triggerdown', () => {
-                if (isHoldingJoystick) { fireGuns(); } // Стреляем, только если держим штурвал!
+                if (isHoldingJoystick) fireGuns();
             });
 
             scene.add(controllerRight);
 
-            // Визуальная сфера-рука вместо контроллера в VR
-            handMesh = new THREE.Mesh(new THREE.SphereGeometry(0.06), new THREE.MeshBasicMaterial({color: 0x00ffcc}));
-            controllerRight.add(handMesh);
+            // Маркер руки в VR
+            let hand = new THREE.Mesh(new THREE.SphereGeometry(0.05), new THREE.MeshBasicMaterial({color: 0x00ff66}));
+            controllerRight.add(hand);
 
-            // Спавн Шахедов
+            // Спавн реалистичных Шахедов
             for (let i = 0; i < 6; i++) { spawnShahed(); }
 
             renderer.setAnimationLoop(gameLoop);
         }
 
+        // РЕАЛИСТИЧНАЯ МОДЕЛЬ ШАХЕДА-136 (Кили на крыльях + геометрия камикадзе)
         function spawnShahed() {
             const shahed = new THREE.Group();
             
-            // Большое треугольное крыло Шахеда
-            const wing = new THREE.Mesh(new THREE.ConeGeometry(4, 0.2, 3), new THREE.MeshLambertMaterial({ color: 0x2b2b2b }));
+            // Большое треугольное дельтовидное крыло
+            const wing = new THREE.Mesh(new THREE.ConeGeometry(5, 0.15, 3), new THREE.MeshLambertMaterial({ color: 0x3a3d40 }));
             wing.rotation.x = Math.PI / 2;
             shahed.add(wing);
 
-            // Длинный фюзеляж-труба
-            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 2.6), new THREE.MeshLambertMaterial({ color: 0x1f1f1f }));
+            // Длинный цилиндрический фюзеляж спереди
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 3), new THREE.MeshLambertMaterial({ color: 0x25282a }));
             body.rotation.x = Math.PI / 2;
+            body.position.z = -0.5;
             shahed.add(body);
 
-            shahed.position.set((Math.random() * 300) - 150, (Math.random() * 80) + 30, jet.position.z - 500 - (Math.random() * 300));
+            // Реалистичные вертикальные кили (стабилизаторы) на законцовках крыльев
+            const stabilizerL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.8, 0.6), new THREE.MeshLambertMaterial({color: 0x25282a}));
+            stabilizerL.position.set(-2.5, 0.3, 0.5);
+            shahed.add(stabilizerL);
+
+            const stabilizerR = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.8, 0.6), new THREE.MeshLambertMaterial({color: 0x25282a}));
+            stabilizerR.position.set(2.5, 0.3, 0.5);
+            shahed.add(stabilizerR);
+
+            // Шахеды появляются высоко в небе и выбирают случайный завод в качестве цели
+            let randomFactory = targets[Math.floor(Math.random() * targets.length)];
+            shahed.position.set(
+                randomFactory.position.x + (Math.random() * 100 - 50),
+                180 + Math.random() * 70,
+                jet.position.z - 1200 - Math.random() * 400
+            );
+
+            // Запоминаем точку завода, куда летит дрон
+            shahed.userData = { targetFactory: randomFactory, targetX: randomFactory.position.x, targetZ: randomFactory.position.z };
+
             scene.add(shahed);
             shaheds.push(shahed);
         }
 
         function fireGuns() {
-            // Двойной лазерный выстрел (с двух крыльев)
-            const makeLaser = (sideX) => {
-                const laser = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 6), new THREE.MeshBasicMaterial({ color: 0x00ffff }));
-                laser.rotation.x = Math.PI / 2;
-                laser.position.set(jet.position.x + sideX, jet.position.y - 0.2, jet.position.z - 4);
-                scene.add(laser);
-                bullets.push(laser);
+            // Реалистичные скорострельные сдвоенные авиапушки
+            const makeLaser = (x) => {
+                const b = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 8), new THREE.MeshBasicMaterial({ color: 0xffcc00 }));
+                b.rotation.x = Math.PI / 2;
+                b.position.set(jet.position.x + x, jet.position.y - 0.3, jet.position.z - 4);
+                scene.add(b);
+                bullets.push(b);
             };
-            makeLaser(-1.6);
-            makeLaser(1.6);
+            makeLaser(-1.8); makeLaser(1.8);
         }
 
         function gameLoop() {
-            // Постоянный разгон самолета
-            if (speed < 1.1) speed += 0.006;
+            // Постоянный автоматический разгон по полосе
+            if (speed < 1.4) speed += 0.008;
 
-            // ФИЗИКА ДВИЖЕНИЯ РУКИ И ШТУРВАЛА
+            // УПРАВЛЕНИЕ: ЕСЛИ GRIP ЗАЖАТ — РЫЧАГ РАБОТАЕТ
             if (controllerRight && isHoldingJoystick) {
                 let handRot = controllerRight.rotation;
 
-                // Передаем наклон руки на рычаг кабины
+                // Джойстик синхронно повторяет наклон руки
                 joystickBase.rotation.set(handRot.x, 0, handRot.z);
 
-                // Управление самолетом
                 if (speed > 0.4) {
-                    jet.rotation.y -= handRot.z * 0.015; // Поворот
+                    jet.rotation.y -= handRot.z * 0.016; // Поворот
+                    jet.rotation.z = -handRot.z * 1.5;   // РЕАЛИСТИЧНЫЙ КРЕН НА КРЫЛО ПРИ ВИРАЖЕ
                     
-                    // Тянем руку на себя (handRot.x отрицательный в этой системе координат) -> взлет
                     if (handRot.x < -0.05 || isAirborne) {
-                        jet.rotation.x = -handRot.x * 0.4;
+                        jet.rotation.x = -handRot.x * 0.45; // Тангаж (взлет/пикирование)
                         isAirborne = true;
                     }
                 }
             } else {
-                // Если штурвал отпущен — самолет летит ровно по инерции
+                // Если штурвал отпущен — самолет стабилизирует крен самостоятельно
+                jet.rotation.z *= 0.94;
                 if(isAirborne) jet.rotation.x *= 0.98;
-                jet.rotation.z *= 0.95;
             }
 
-            // Движение вперед в 3D
+            // Физика шасси и полета
             if (isAirborne) {
                 jet.translateZ(-speed);
             } else {
-                // Катимся по взлетке
                 jet.position.z -= speed;
-                jet.position.y = 0.1;
+                jet.position.y = 0.2;
                 jet.rotation.x = 0;
             }
 
-            // Защита от падения под грунт пустыни
-            if (jet.position.y < 0.1) { jet.position.y = 0.1; isAirborne = false; }
+            if (jet.position.y < 0.2) { jet.position.y = 0.2; isAirborne = false; }
 
-            // Логика полета снарядов
+            // Полет снарядов пушки
             for (let i = bullets.length - 1; i >= 0; i--) {
-                bullets[i].position.z -= 5;
+                bullets[i].position.z -= 6;
                 
-                // Проверяем попадание в Шахеды
                 for (let j = shaheds.length - 1; j >= 0; j--) {
-                    if (bullets[i].position.distanceTo(shaheds[j].position) < 20) {
+                    if (bullets[i].position.distanceTo(shaheds[j].position) < 25) {
+                        // Попадание! Уничтожаем Шахед
                         scene.remove(shaheds[j]);
                         shaheds.splice(j, 1);
                         scene.remove(bullets[i]);
                         bullets.splice(i, 1);
                         score++;
-                        spawnShahed(); // Новый вместо уничтоженного
+                        spawnShahed(); // Спавним новую волну
                         break;
                     }
                 }
 
-                if (bullets[i] && bullets[i].position.z < jet.position.z - 600) {
+                if (bullets[i] && bullets[i].position.z < jet.position.z - 700) {
                     scene.remove(bullets[i]);
                     bullets.splice(i, 1);
                 }
             }
 
-            // Движение Шахедов над каньоном навстречу нам
-            shaheds.forEach(shahed => {
-                shahed.position.z += 0.4;
-                if (shahed.position.z > jet.position.z + 50) {
-                    // Респавн впереди, если пролетели мимо
-                    shahed.position.set((Math.random() * 300) - 150, (Math.random() * 80) + 30, jet.position.z - 600);
+            // ЛОГИКА ШАХЕДОВ: ОНИ АТАКУЮТ ЗАВОДЫ
+            shaheds.forEach((shahed, index) => {
+                let data = shahed.userData;
+                
+                // Направление полета строго на выбранный завод
+                shahed.position.z += 0.6; // Скорость дрона
+                if (shahed.position.x < data.targetX) shahed.position.x += 0.15;
+                if (shahed.position.x > data.targetX) shahed.position.x -= 0.15;
+                
+                // Траектория пикирования (снижаются к заводу по мере приближения)
+                if (shahed.position.z > data.targetZ - 300 && shahed.position.y > 10) {
+                    shahed.position.y -= 0.4;
+                    shahed.rotation.x = 0.2; // Наклоняем нос вниз к цели
                 }
-            });
 
-            // Цикличный перенос гор вперед, создавая бесконечный каньон
-            mountains.forEach(m => {
-                if (m.position.z > jet.position.z + 100) {
-                    m.position.z = jet.position.z - 1500 - Math.random()*500;
+                // ПРОВЕРКА УДАРА ПО ЗАВОДУ: если долетел до координат цели
+                if (shahed.position.z >= data.targetZ && Math.abs(shahed.position.x - data.targetX) < 30) {
+                    // Произошел взрыв на заводе!
+                    scene.remove(shahed);
+                    shaheds.splice(index, 1);
+                    spawnShahed(); // Летит следующий
                 }
             });
 
