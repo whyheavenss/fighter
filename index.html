@@ -1,227 +1,258 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>WebXR Interceptor: No Chaos, Total Defense</title>
-    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Стальной Перехватчик 2026</title>
     <style>
-      /* Кнопка на ПК, чтобы развернуть */
-      #fallback-btn {
-        position: absolute; top: 10px; left: 10px; z-index: 1000;
-        padding: 10px; background: #FF3366; color: #fff; border: none;
-      }
+        body, html { margin: 0; padding: 0; overflow: hidden; background: #050510; font-family: monospace; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #ui {
+            position: absolute; top: 20px; left: 20px; color: #39ff14;
+            font-size: 20px; text-shadow: 0 0 10px #00ff00; pointer-events: none;
+        }
+        #controls-hint {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            color: #00ffff; font-size: 16px; text-align: center; text-shadow: 0 0 5px #00ffff;
+        }
     </style>
-  </head>
-  <body>
+</head>
+<body>
 
-    <button id="fallback-btn" onclick="document.querySelector('a-scene').enterVR()">ВОЙТИ В VR (QUEST 3)</button>
+    <div id="ui">
+        [ БОРТОВОЙ КОМПЬЮТЕР ИСТРЕБИТЕЛЯ ]<br>
+        ---------------------------------<br>
+        СКОРОСТЬ: <span id="speed">0</span> КМ/Ч<br>
+        ВЫСОТА: <span id="alt">0</span> М<br>
+        СБИТО ШАХЕДОВ: <span id="score">0</span>
+    </div>
+
+    <div id="controls-hint">
+        Управление (ПК): Мышка — поворот/наклон | Клик — огонь<br>
+        Управление (Quest 3): Води пальцем по экрану/стику для набора высоты и стрельбы
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
 
     <script>
-      // Игровые переменные
-      let speed = 0; // Разгон с нуля
-      let isAirborne = false; 
-      let score = 0;
-      let shaheds = [];
-      let maxSpeed = 1.0; // Быстрый разгон
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
 
-      AFRAME.registerComponent('fighter-systems', {
-        init: function () {
-          this.player = document.querySelector('#fighter');
-          this.camera = document.querySelector('#eyes');
-          this.rCtrl = document.querySelector('#right-quest-controller');
-          this.scoreTxt = document.querySelector('#score-txt');
-          this.speedTxt = document.querySelector('#spd-txt');
-          this.altTxt = document.querySelector('#alt-txt');
-          this.joystick = document.querySelector('#rus');
-          
-          // Слушаем КУРОК (Trigger) на Quest 3 для стрельбы
-          this.rCtrl.addEventListener('triggerdown', () => { this.fireCanons(); });
-          
-          // Тест стрельбы на ПК
-          window.addEventListener('click', () => { if(!this.el.sceneEl.is('vr-mode')) this.fireCanons(); });
-
-          // Создаем Шахеды внутри кода
-          for (let i = 0; i < 5; i++) { this.createShahed(i); }
-        },
-
-        tick: function (time, timeDelta) {
-          if (speed < maxSpeed) { speed += 0.015; } // Авто-разгон
-
-          let pos = this.player.getAttribute('position');
-          let rot = this.player.getAttribute('rotation');
-
-          // 🎮 VR Управление через наклон контроллера Quest 3
-          // Мы считываем положение и передаем его наклон
-          let ctrlRot = this.rCtrl.getAttribute('rotation');
-          if (ctrlRot) {
-            rot.x += (ctrlRot.x * 0.012); // Тангаж (вверх/вниз)
-            rot.y -= (ctrlRot.z * 0.012); // Поворот
-            rot.z = -ctrlRot.z * 1.5;      // Визуальный крен
-
-            // Ограничители, чтобы не закрутило
-            rot.x = Math.max(-40, Math.min(40, rot.x));
-            
-            // Анимируем джойстик в кабине за истребителем
-            this.joystick.setAttribute('rotation', { x: -rot.x, y: 0, z: -rot.z });
-            
-            // Взлет: если набрали скорость взлета (больше 0.35)
-            if (speed > 0.35 && rot.x > 2 && !isAirborne) { isAirborne = true; }
-          }
-
-          // Физика движения
-          if (isAirborne) {
-            // Полет в 3D пространстве
-            let angleY = rot.y * Math.PI / 180;
-            let angleX = rot.x * Math.PI / 180;
-            pos.x -= speed * Math.sin(angleY) * (timeDelta / 16.6);
-            pos.z -= speed * Math.cos(angleY) * (timeDelta / 16.6);
-            pos.y += speed * Math.sin(angleX) * (timeDelta / 16.6);
-          } else {
-            // Разгон строго по полосе
-            pos.z -= speed * (timeDelta / 16.6);
-            pos.y = 20; 
-          }
-
-          // Граница земли
-          if (pos.y < 20) { pos.y = 20; rot.x = 0; isAirborne = false; }
-          
-          this.player.setAttribute('position', pos);
-          this.player.setAttribute('rotation', rot);
-
-          // Обновление HUD приборов
-          this.speedText.setAttribute('value', `SPD: ${Math.round(speed * 1200)} KTS`);
-          this.altText.setAttribute('value', `ALT: ${Math.round(pos.y - 20)} M`);
-
-          // Движение Шахедов
-          shaheds.forEach(drone => {
-            let dPos = drone.getAttribute('position');
-            dPos.z += speed * 0.9 * (timeDelta / 16.6);
-            drone.setAttribute('position', dPos);
-
-            if (dPos.z > pos.z + 50) { // Респавн впереди
-              dPos.z = pos.z - 150;
-              dPos.x = pos.x + (Math.random() * 200) - 100;
-              dPos.y = pos.y + (Math.random() * 40) + 10;
-              drone.setAttribute('position', dPos);
-              drone.setAttribute('visible', true);
-              drone.classList.add('can-shoot');
-            }
-          });
-        },
-
-        fireCanons: function () {
-          let pPos = this.player.getAttribute('position');
-          let pRot = this.player.getAttribute('rotation');
-
-          const spawnTracer = (offset) => {
-            let tracer = document.createElement('a-cylinder');
-            tracer.setAttribute('radius', 0.06); tracer.setAttribute('height', 8);
-            tracer.setAttribute('material', {color: '#ffff33', shader: 'flat', emissive: '#ffff00'});
-            tracer.setAttribute('position', {x: pPos.x + offset, y: pPos.y, z: pPos.z - 3});
-            
-            let targetZ = pPos.z - 300;
-            let targetX = pPos.x - 300 * Math.sin(pRot.y * Math.PI / 180);
-
-            tracer.setAttribute('animation', {
-              property: 'position', to: `${targetX} ${pPos.y + (pRot.x * 2)} ${targetZ}`, dur: 450, easing: 'linear'
-            });
-            document.querySelector('a-scene').appendChild(tracer);
-            setTimeout(() => { tracer.remove(); }, 450);
-          };
-
-          spawnTracer(-1.5); spawnTracer(1.5); // Стрельба с двух крыльев
-
-          // Raycast прицела
-          let pointerRay = document.querySelector('#hud-pointer').components.raycaster;
-          let intersections = pointerRay.getIntersection(document.querySelectorAll('.can-shoot'));
-          if (intersections) {
-            let hitDrone = intersections.el;
-            hitDrone.setAttribute('visible', false);
-            hitDrone.classList.remove('can-shoot');
-            score += 100;
-            this.scoreTxt.setAttribute('value', score);
-          }
-        },
-
-        createShahed: function (i) {
-          // Создаем Шахед 136 (треугольный корпус + фюзеляж) внутри кода
-          let container = document.createElement('a-entity');
-          
-          // Большое треугольное крыло (Delta-wing)
-          let deltaWing = document.createElement('a-cone');
-          deltaWing.setAttribute('radius-bottom', 2.5); deltaWing.setAttribute('height', 0.1);
-          deltaWing.setAttribute('scale', '1 1 0.3'); // Тонкое
-          deltaWing.setAttribute('rotation', '90 0 0');
-          deltaWing.setAttribute('material', {color: '#2a2a2a', metalness: 0.6, roughness: 0.3});
-          container.appendChild(deltaWing);
-
-          // Центральный фюзеляж (капсула)
-          let fuselage = document.createElement('a-cylinder');
-          fuselage.setAttribute('radius', 0.15); fuselage.setAttribute('height', 2.2);
-          fuselage.setAttribute('rotation', '90 0 0');
-          fuselage.setAttribute('material', {color: '#1a1a1a'});
-          container.appendChild(fuselage);
-
-          let pPos = this.player.getAttribute('position') || {x:0, y:20, z:0};
-          container.setAttribute('position', {
-            x: (Math.random() * 80) - 40,
-            y: (Math.random() * 40) + 10,
-            z: pPos.z - (100 + (i * 30))
-          });
-
-          container.classList.add('can-shoot');
-          document.querySelector('a-scene').appendChild(container);
-          shaheds.push(container);
+        // Ресайз под экран
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
         }
-      });
-    </script>
+        window.addEventListener('resize', resize);
+        resize();
 
-    <a-scene fighter-systems vr-mode-ui="enabled: true; enterVRBtn: #fallback-btn" webxr="referenceSpaceType: local">
-      
-      <a-sky color="#03081a"></a-sky> <a-light type="ambient" color="#BBB"></a-light>
-      <a-light type="directional" color="#FFF; intensity: 0.9" position="-1 2 1"></a-light>
+        // Состояние игры
+        let player = { x: 0, y: 0, z: 0, pitch: 0, yaw: 0, roll: 0, speed: 0, airborne: false };
+        let score = 0;
+        let bullets = [];
+        let shaheds = [];
+        let terrainGrid = [];
 
-      <a-grid width="5000" height="5000" material="color: #0b0f2a; gridColor: #33ffff; opacity: 0.8" rotation="-90 0 0"></a-grid>
+        // Инициализация цветной земли (сетки)
+        for (let z = 0; z < 60; z++) {
+            let row = [];
+            for (let x = -20; x <= 20; x++) {
+                row.push({ x: x * 30, y: 0, z: -z * 40 });
+            }
+            terrainGrid.push(row);
+        }
 
-      <a-box position="0 19.95 -150" width="16" height="0.1" depth="500" color="#3d3d4a"></a-box>
-      <a-box position="0 19.98 -100" width="0.4" height="0.05" depth="20" color="#ffffff"></a-box>
-      <a-box position="0 19.98 -200" width="0.4" height="0.05" depth="20" color="#ffffff"></a-box>
-      <a-box position="0 19.98 -300" width="0.4" height="0.05" depth="20" color="#ffffff"></a-box>
+        // Создание врагов (Шахедов) с треугольными крыльями
+        function spawnShahed() {
+            return {
+                x: (Math.random() * 800) - 400,
+                y: (Math.random() * 200) + 100,
+                z: player.z - 1500 - (Math.random() * 500),
+                active: true,
+                size: 25
+            };
+        }
+        for (let i = 0; i < 7; i++) { shaheds.push(spawnShahed()); }
 
-      <a-entity id="fighter" position="0 20 0">
-        
-        <a-camera id="eyes" look-controls wasd-controls-enabled="false" near="0.05">
-          
-          <a-entity position="0 0 -1">
-            <a-entity id="hud-pointer" raycaster="objects: .can-shoot; far: 250">
-              <a-ring radius-inner="0.04" radius-outer="0.045" color="#33ff33" material="shader: flat; opacity:0.8; transparent:true"></a-ring>
-              <a-circle radius="0.003" color="#33ff33" material="shader: flat"></a-circle>
-            </a-entity>
+        // Мышка на ПК управляет самолетом
+        let mouseX = 0, mouseY = 0;
+        window.addEventListener('mousemove', (e) => {
+            mouseX = (e.clientX / canvas.width) - 0.5;
+            mouseY = (e.clientY / canvas.height) - 0.5;
+        });
+
+        // Стрельба
+        window.addEventListener('mousedown', () => {
+            bullets.push({ x: player.x - 15, y: player.y, z: player.z - 20 });
+            bullets.push({ x: player.x + 15, y: player.y, z: player.z - 20 });
+        });
+
+        // Главный игровой цикл (60 FPS)
+        function loop() {
+            ctx.fillStyle = '#050515'; // Глубокое ночное небо
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 1. Логика полета и разгона
+            if (player.speed < 25) player.speed += 0.15; // Авто-разгон на взлетной полосе
             
-            <a-text id="spd-txt" value="SPD: 0 KTS" position="0.2 0.22 0" color="#33ff33" width="1"></a-text>
-            <a-text id="alt-txt" value="ALT: 0 M" position="0.2 0.15 0" color="#33ff33" width="1"></a-text>
-            <a-text value="TARGETS DOWN:" position="-0.4 0.35 0" color="#33ff33" width="1.2"></a-text>
-            <a-text id="score-txt" value="0" position="-0.15 0.35 0" color="#33ff33" width="1.5"></a-text>
-          </a-entity>
+            player.yaw += -mouseX * 0.05;
+            player.pitch += -mouseY * 0.03;
+            player.roll = mouseX * 40;
 
-          <a-sphere radius="2.2" phiLength="180" material="color: #66ccff; opacity: 0.1; transparent: true; wireframe: false" rotation="0 90 0"></a-sphere>
-          <a-box position="0 -0.8 -0.6" width="1.2" height="0.6" depth="0.5" color="#1a1c22"></a-box>
+            if (player.speed > 15 && player.pitch > 0.1) {
+                player.airborne = true;
+            }
 
-          <a-entity id="rus" position="0 -0.42 -0.45">
-            <a-cylinder radius="0.015" height="0.25" color="#111"></a-cylinder>
-            <a-sphere radius="0.035" color="#cc0000" position="0 0.13 0"></a-sphere>
-          </a-entity>
+            player.z -= player.speed;
+            if (player.airborne) {
+                player.y += Math.sin(player.pitch) * player.speed;
+                player.x += Math.sin(player.yaw) * player.speed;
+            } else {
+                player.y = 0;
+                player.pitch = 0;
+            }
 
-        </a-camera>
+            // Защита от падения под текстуры
+            if (player.y < 0) { player.y = 0; player.airborne = false; }
 
-        <a-box position="-3.5 -0.3 -2" width="4" height="0.04" depth="2" color="#0a0f2a" rotation="0 -15 10"></a-box>
-        <a-box position="3.5 -0.3 -2" width="4" height="0.04" depth="2" color="#0a0f2a" rotation="0 15 -10"></a-box>
-        
-      </a-entity>
+            // Обновление интерфейса
+            document.getElementById('speed').innerText = Math.round(player.speed * 30);
+            document.getElementById('alt').innerText = Math.round(player.y * 3);
+            document.getElementById('score').innerText = score;
 
-      <a-entity id="right-quest-controller" oculus-touch-controls="hand: right"></a-entity>
-      <a-entity oculus-touch-controls="hand: left"></a-entity>
+            // 3D Камера (Матрица проекции на экран)
+            let cx = canvas.width / 2;
+            let cy = canvas.height / 2;
+            let fov = 400;
 
-    </a-scene>
-  </body>
+            function project(x, y, z) {
+                let relX = x - player.x;
+                let relY = y - player.y;
+                let relZ = z - player.z;
+
+                if (relZ >= 0) return null; // Сзади нас
+                let scale = fov / -relZ;
+                return {
+                    x: cx + relX * scale,
+                    y: cy - relY * scale,
+                    scale: scale
+                };
+            }
+
+            // 2. ОТРИСОВКА ВЗЛЕТНОЙ ПОЛОСЫ И ТЕКСТУРЫ ЗЕМЛИ
+            ctx.strokeStyle = '#005533';
+            ctx.lineWidth = 1;
+
+            // Отрисовка сетки полей
+            let offsetZ = Math.floor(player.z / 40) * 40;
+            for (let z = 0; z < 40; z++) {
+                ctx.beginPath();
+                for (let x = -20; x <= 20; x++) {
+                    let p = project(x * 50, 0, offsetZ - z * 40);
+                    if (p) {
+                        if (x === -20) ctx.moveTo(p.x, p.y);
+                        else ctx.lineTo(p.x, p.y);
+                    }
+                }
+                ctx.stroke();
+            }
+
+            // Отрисовка Взлетно-Посадочной Полосы (ВПП)
+            ctx.fillStyle = '#22222b';
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 3;
+            
+            let runwayLeft1 = project(-30, 0, 0);
+            let runwayRight1 = project(30, 0, 0);
+            let runwayLeft2 = project(-30, 0, -800);
+            let runwayRight2 = project(30, 0, -800);
+
+            if (runwayLeft1 && runwayLeft2 && runwayRight1 && runwayRight2) {
+                ctx.beginPath();
+                ctx.moveTo(runwayLeft1.x, runwayLeft1.y);
+                ctx.lineTo(runwayLeft2.x, runwayLeft2.y);
+                ctx.lineTo(runwayRight2.x, runwayRight2.y);
+                ctx.lineTo(runwayRight1.x, runwayRight1.y);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            }
+
+            // 3. ОТРИСОВКА ОХОТЫ НА ШАХЕДЫ
+            shaheds.forEach((s) => {
+                if (!s.active) return;
+                
+                // Движение Шахеда навстречу
+                s.z += 3;
+                if (s.z > player.z) { Object.assign(s, spawnShahed()); }
+
+                let p = project(s.x, s.y, s.z);
+                if (p) {
+                    let w = s.size * p.scale;
+                    
+                    // Рисуем Шахед (Треугольное крыло Delta-wing)
+                    ctx.fillStyle = '#111115';
+                    ctx.strokeStyle = '#ff0055';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(p.x, p.y - w/4); // Нос
+                    ctx.lineTo(p.x - w, p.y + w/2); // Левое крыло
+                    ctx.lineTo(p.x + w, p.y + w/2); // Правое крыло
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+
+                    // Сигнальный мигающий огонек на фюзеляже Шахеда
+                    if (Date.now() % 400 > 200) {
+                        ctx.fillStyle = '#ff0000';
+                        ctx.beginPath(); ctx.arc(p.x, p.y + w/4, 3 * p.scale, 0, Math.PI*2); ctx.fill();
+                    }
+                }
+            });
+
+            // 4. НАШИ ЛАЗЕРНЫЕ СНАРЯДЫ
+            ctx.fillStyle = '#00ffff';
+            bullets.forEach((b, index) => {
+                b.z -= 45; // Скорость пули
+                let p = project(b.x, b.y, b.z);
+                if (p) {
+                    ctx.fillRect(p.x, p.y, 4, 12 * p.scale);
+
+                    // Проверка коллизий с Шахедами
+                    shaheds.forEach((s) => {
+                        if (!s.active) return;
+                        let dist = Math.hypot(b.x - s.x, b.y - s.y, b.z - s.z);
+                        if (dist < 40) {
+                            s.active = false;
+                            score++;
+                            bullets.splice(index, 1);
+                            
+                            // Анимация взрыва
+                            ctx.fillStyle = '#ff5500';
+                            ctx.beginPath(); ctx.arc(p.x, p.y, 30, 0, Math.PI*2); ctx.fill();
+                            
+                            setTimeout(() => { Object.assign(s, spawnShahed()); }, 1000);
+                        }
+                    });
+                }
+                if (b.z < player.z - 2000) bullets.splice(index, 1);
+            });
+
+            // 5. HUD АВИАЦИОННЫЙ ПРИЦЕЛ ПО ЦЕНТРУ ЭКРАНА
+            ctx.strokeStyle = '#39ff14';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, 30, 0, Math.PI * 2);
+            ctx.moveTo(cx - 45, cy); ctx.lineTo(cx - 15, cy);
+            ctx.moveTo(cx + 15, cy); ctx.lineTo(cx + 45, cy);
+            ctx.moveTo(cx, cy - 45); ctx.lineTo(cx, cy - 15);
+            ctx.moveTo(cx, cy + 15); ctx.lineTo(cx, cy + 45);
+            ctx.stroke();
+
+            requestAnimationFrame(loop);
+        }
+
+        loop();
+    </script>
+</body>
 </html>
