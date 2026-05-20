@@ -2,299 +2,516 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>ПВО Симулятор 2026: Защита Заводов</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Браузерный Симулятор ПВО 2026: Стальной Перехватчик</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #05020c; }
-        #vr-button {
-            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
-            padding: 15px 35px; background: #00ff66; color: black; border: 3px solid #fff;
-            border-radius: 8px; font-family: monospace; font-size: 22px; font-weight: bold; cursor: pointer; z-index: 999;
-            box-shadow: 0 0 25px #00ff66;
+        body, html { margin: 0; padding: 0; overflow: hidden; background-color: #03030a; font-family: monospace; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #overlay-ui {
+            position: absolute; top: 20px; left: 20px; color: #00ff66;
+            font-size: 18px; line-height: 1.5; pointer-events: none; z-index: 10;
+            background: rgba(0,0,0,0.6); padding: 15px; border-radius: 8px; border: 1px solid #00ff66;
         }
+        #vr-btn {
+            position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+            padding: 18px 40px; background: #ff0055; color: white; border: 3px solid white;
+            border-radius: 30px; font-size: 22px; font-weight: bold; cursor: pointer; z-index: 100;
+            box-shadow: 0 0 30px #ff0055;
+        }
+        #vr-btn:hover { background: #fff; color: #000; }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
-    <button id="vr-button">ЗАПУСТИТЬ ПЕРЕХВАТЧИК</button>
+    <div id="overlay-ui">
+        === СИСТЕМА БОРТОВОГО ПВО ===<br>
+        СТАТУС ИСТРЕБИТЕЛЯ: <span id="ui-status" style="color: #ffcc00;">НА ПОЛОСЕ</span><br>
+        СКОРОСТЬ: <span id="ui-speed">0</span> КМ/Ч<br>
+        ВЫСОТА: <span id="ui-alt">0</span> М<br>
+        -----------------------------<br>
+        ЗАЩИТА ГОРОДА: <span id="ui-health" style="color: #00ff66;">100%</span><br>
+        СБИТО ШАХЕДОВ: <span id="ui-score" style="color: #00ffff;">0</span>
+    </div>
+
+    <button id="vr-btn">ВЗЛЕТЕТЬ В VR (QUEST 3)</button>
+
+    <canvas id="renderCanvas"></canvas>
 
     <script>
-        let scene, camera, renderer;
-        let jet, joystickBase, joystick;
-        let speed = 0, isAirborne = false;
-        let shaheds = [], bullets = [], targets = [];
-        let score = 0, factoryHealth = 100;
-        
-        let controllerRight;
-        let isHoldingJoystick = false;
+        // === ИГРОВОЙ ДВИЖОК И МАТЕМАТИКА 3D ПРОЕКЦИИ ===
+        const canvas = document.getElementById('renderCanvas');
+        const ctx = canvas.getContext('2d');
 
-        function init() {
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x140e28); // Мрачное предрассветное небо ПВО
-            scene.fog = new THREE.FogExp2(0x140e28, 0.002);
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
 
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1500);
-            
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
-            document.body.appendChild(renderer.domElement);
-
-            // Кнопка VR
-            const vrBtn = document.getElementById('vr-button');
-            vrBtn.addEventListener('click', () => {
-                navigator.xr.requestSession('immersive-vr', { requiredFeatures: ['local-floor'] }).then((session) => {
-                    renderer.xr.setSession(session);
-                    vrBtn.style.display = 'none';
-                });
-            });
-
-            // Освещение
-            scene.add(new THREE.AmbientLight(0xffffff, 0.4));
-            const light = new THREE.DirectionalLight(0xffddaa, 1.0);
-            light.position.set(100, 200, 50);
-            scene.add(light);
-
-            // Земля (Ландшафт)
-            const ground = new THREE.Mesh(
-                new THREE.PlaneGeometry(6000, 6000, 8, 8),
-                new THREE.MeshLambertMaterial({ color: 0x1e251c, wireframe: false })
-            );
-            ground.rotation.x = -Math.PI / 2;
-            scene.add(ground);
-
-            // 🏭 СОЗДАЕМ ИНДУСТРИАЛЬНЫЕ ОБЪЕКТЫ (ЗАВОДЫ И СТАНЦИИ)
-            for (let i = 0; i < 5; i++) {
-                let factoryGroup = new THREE.Group();
-                
-                // Главный цех завода
-                let hangar = new THREE.Mesh(new THREE.BoxGeometry(40, 15, 60), new THREE.MeshLambertMaterial({color: 0x55555f}));
-                hangar.position.y = 7.5;
-                factoryGroup.add(hangar);
-
-                // Высокая дымовая труба ТЭЦ
-                let chimney = new THREE.Mesh(new THREE.CylinderGeometry(2, 3, 40), new THREE.MeshLambertMaterial({color: 0x773333}));
-                chimney.position.set(15, 20, -20);
-                factoryGroup.add(chimney);
-
-                // Огонек на трубе
-                let redLight = new THREE.Mesh(new THREE.SphereGeometry(0.5), new THREE.MeshBasicMaterial({color: 0xff0000}));
-                redLight.position.set(15, 40, -20);
-                factoryGroup.add(redLight);
-
-                // Расставляем заводы вдоль курса полета
-                factoryGroup.position.set((i - 2) * 180, 0, -600 - (Math.random() * 300));
-                scene.add(factoryGroup);
-                targets.push(factoryGroup); // Шахеды будут лететь сюда
+        // 3D Матричные утилиты (Чистая математика вращения без библиотек)
+        function multiplyMatrixAndVector(matrix, vector) {
+            let out = [];
+            for (let i = 0; i < 4; i++) {
+                out[i] = matrix[i*4]*vector[0] + matrix[i*4+1]*vector[1] + matrix[matrix[i*4+2]]*vector[2] + matrix[i*4+3]*(vector[3]||1);
             }
-
-            // ВЗЛЕТНАЯ ПОЛОСА ПВО
-            runway = new THREE.Mesh(new THREE.BoxGeometry(30, 0.2, 1000), new THREE.MeshLambertMaterial({ color: 0x282828 }));
-            runway.position.set(0, 0.1, -450);
-            scene.add(runway);
-
-            // ИСТРЕБИТЕЛЬ С КАБИНОЙ
-            jet = new THREE.Group();
-            jet.position.set(0, 0, 0); // Старт на ВПП
-            scene.add(jet);
-
-            // Каркас кабины (Стекло)
-            const glass = new THREE.Mesh(
-                new THREE.SphereGeometry(2.5, 16, 16),
-                new THREE.MeshBasicMaterial({ color: 0x33ff33, wireframe: true, opacity: 0.03, transparent: true })
-            );
-            jet.add(glass);
-
-            // Авиационная панель приборов
-            const panel = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.6, 0.5), new THREE.MeshLambertMaterial({color: 0x1c1d22}));
-            panel.position.set(0, -0.3, -0.8);
-            jet.add(panel);
-
-            // 🕹 ИСПРАВЛЕННЫЙ ШТУРВАЛ (РУС) — СТАЛ ВЫШЕ И УДОБНЕЕ
-            joystickBase = new THREE.Group();
-            joystickBase.position.set(0, 0.05, -0.5); // Подняли в зону прямой видимости груди пилота
-            jet.add(joystickBase);
-
-            const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.02, 0.5), new THREE.MeshLambertMaterial({ color: 0x333339 }));
-            stick.position.y = 0.25;
-            joystickBase.add(stick);
-
-            joystick = new THREE.Mesh(new THREE.SphereGeometry(0.05), new THREE.MeshLambertMaterial({ color: 0xcc0000 }));
-            joystick.position.y = 0.5;
-            joystickBase.add(joystick);
-
-            // Камера пилота
-            jet.add(camera);
-            camera.position.set(0, 0.6, 0);
-
-            // 🎮 КВЕСТ 3: НАСТРОЙКА КОНТРОЛЛЕРОВ
-            controllerRight = renderer.xr.getController(0);
-            
-            // МАГНИТНЫЙ ЗАХВАТ: Жмем Grip — штурвал автоматически в руке!
-            controllerRight.addEventListener('gripdown', () => {
-                isHoldingJoystick = true;
-            });
-            controllerRight.addEventListener('gripup', () => {
-                isHoldingJoystick = false;
-                joystickBase.rotation.set(0, 0, 0);
-            });
-
-            // СТРЕЛЬБА НА КУРОК (TRIGGER) НА ПРАВОМ КОНТРОЛЛЕРЕ
-            controllerRight.addEventListener('triggerdown', () => {
-                if (isHoldingJoystick) fireGuns();
-            });
-
-            scene.add(controllerRight);
-
-            // Маркер руки в VR
-            let hand = new THREE.Mesh(new THREE.SphereGeometry(0.05), new THREE.MeshBasicMaterial({color: 0x00ff66}));
-            controllerRight.add(hand);
-
-            // Спавн реалистичных Шахедов
-            for (let i = 0; i < 6; i++) { spawnShahed(); }
-
-            renderer.setAnimationLoop(gameLoop);
+            return out;
         }
 
-        // РЕАЛИСТИЧНАЯ МОДЕЛЬ ШАХЕДА-136 (Кили на крыльях + геометрия камикадзе)
+        function getRotationMatrix(ax, ay, az) {
+            let cx = Math.cos(ax), sx = Math.sin(ax);
+            let cy = Math.cos(ay), sy = Math.sin(ay);
+            let cz = Math.cos(az), sz = Math.sin(az);
+            
+            return [
+                cy*cz, -cy*sz, sy, 0,
+                sx*sy*cz + cx*sz, -sx*sy*sz + cx*cz, -sx*cy, 0,
+                -cx*sy*cz + sx*sz, cx*sy*sz + sx*cz, cx*cy, 0,
+                0, 0, 0, 1
+            ];
+        }
+
+        // Параметры самолета и мира
+        let jet = { x: 0, y: 20, z: 0, pitch: 0, yaw: 0, roll: 0, speed: 0, airborne: false };
+        let score = 0;
+        let cityHealth = 100;
+        let xrSession = null;
+        let xrRefSpace = null;
+        
+        // Органы управления
+        let leftHand = { x: -0.3, y: 1.2, z: -0.4, active: false };
+        let rightHand = { x: 0.3, y: 1.2, z: -0.4, active: false, grip: false, trigger: false };
+        let virtualJoystick = { x: 0, y: 0.25, z: -0.5, pitch: 0, roll: 0, height: 0.6 }; // Поднят выше!
+
+        // Объекты
+        let shaheds = [];
+        let factories = [];
+        let bullets = [];
+        let particles = [];
+
+        // Создание заводов на карте
+        for (let i = 0; i < 6; i++) {
+            factories.push({
+                x: (i - 2.5) * 350 + (Math.random() * 100 - 50),
+                y: 0,
+                z: -800 - (Math.random() * 400),
+                width: 60, height: 25, depth: 80,
+                alive: true
+            });
+        }
+
+        // Спавн детализированного Шахеда
         function spawnShahed() {
-            const shahed = new THREE.Group();
-            
-            // Большое треугольное дельтовидное крыло
-            const wing = new THREE.Mesh(new THREE.ConeGeometry(5, 0.15, 3), new THREE.MeshLambertMaterial({ color: 0x3a3d40 }));
-            wing.rotation.x = Math.PI / 2;
-            shahed.add(wing);
-
-            // Длинный цилиндрический фюзеляж спереди
-            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 3), new THREE.MeshLambertMaterial({ color: 0x25282a }));
-            body.rotation.x = Math.PI / 2;
-            body.position.z = -0.5;
-            shahed.add(body);
-
-            // Реалистичные вертикальные кили (стабилизаторы) на законцовках крыльев
-            const stabilizerL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.8, 0.6), new THREE.MeshLambertMaterial({color: 0x25282a}));
-            stabilizerL.position.set(-2.5, 0.3, 0.5);
-            shahed.add(stabilizerL);
-
-            const stabilizerR = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.8, 0.6), new THREE.MeshLambertMaterial({color: 0x25282a}));
-            stabilizerR.position.set(2.5, 0.3, 0.5);
-            shahed.add(stabilizerR);
-
-            // Шахеды появляются высоко в небе и выбирают случайный завод в качестве цели
-            let randomFactory = targets[Math.floor(Math.random() * targets.length)];
-            shahed.position.set(
-                randomFactory.position.x + (Math.random() * 100 - 50),
-                180 + Math.random() * 70,
-                jet.position.z - 1200 - Math.random() * 400
-            );
-
-            // Запоминаем точку завода, куда летит дрон
-            shahed.userData = { targetFactory: randomFactory, targetX: randomFactory.position.x, targetZ: randomFactory.position.z };
-
-            scene.add(shahed);
-            shaheds.push(shahed);
-        }
-
-        function fireGuns() {
-            // Реалистичные скорострельные сдвоенные авиапушки
-            const makeLaser = (x) => {
-                const b = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 8), new THREE.MeshBasicMaterial({ color: 0xffcc00 }));
-                b.rotation.x = Math.PI / 2;
-                b.position.set(jet.position.x + x, jet.position.y - 0.3, jet.position.z - 4);
-                scene.add(b);
-                bullets.push(b);
+            let targetFact = factories[Math.floor(Math.random() * factories.length)];
+            return {
+                x: targetFact.x + (Math.random() * 400 - 200),
+                y: 250 + Math.random() * 100,
+                z: jet.z - 1800 - Math.random() * 600,
+                targetX: targetFact.x,
+                targetZ: targetFact.z,
+                speed: 1.8 + Math.random() * 0.8,
+                active: true,
+                pitch: 0.2
             };
-            makeLaser(-1.8); makeLaser(1.8);
+        }
+        for (let i = 0; i < 8; i++) { shaheds.push(spawnShahed()); }
+
+        // === РАБОТА С WEBXR И КОНТРОЛЛЕРАМИ QUEST 3 ===
+        const vrBtn = document.getElementById('vr-btn');
+        if (navigator.xr) {
+            vrBtn.addEventListener('click', () => {
+                if (!xrSession) {
+                    navigator.xr.requestSession('immersive-vr', { requiredFeatures: ['local-floor'] }).then(onSessionStarted);
+                } else {
+                    xrSession.end();
+                }
+            });
         }
 
-        function gameLoop() {
-            // Постоянный автоматический разгон по полосе
-            if (speed < 1.4) speed += 0.008;
+        function onSessionStarted(session) {
+            xrSession = session;
+            vrBtn.textContent = 'ВЫЙТИ ИЗ VR';
+            session.addEventListener('end', onSessionEnded);
+            
+            session.requestReferenceSpace('local-floor').then((refSpace) => {
+                xrRefSpace = refSpace;
+                session.requestAnimationFrame(onXRFrame);
+            });
+        }
 
-            // УПРАВЛЕНИЕ: ЕСЛИ GRIP ЗАЖАТ — РЫЧАГ РАБОТАЕТ
-            if (controllerRight && isHoldingJoystick) {
-                let handRot = controllerRight.rotation;
+        function onSessionEnded() {
+            xrSession = null;
+            vrBtn.textContent = 'ВЗЛЕТЕТЬ В VR (QUEST 3)';
+            window.requestAnimationFrame(loop);
+        }
 
-                // Джойстик синхронно повторяет наклон руки
-                joystickBase.rotation.set(handRot.x, 0, handRot.z);
+        // === ИГРОВАЯ ФИЗИКА И ЛОГИКА КАЖДОГО КАДРА ===
+        function updateGame(timeDelta) {
+            // 1. Автоматический разгон по полосе
+            if (jet.speed < 45) jet.speed += 0.12 * timeDelta;
 
-                if (speed > 0.4) {
-                    jet.rotation.y -= handRot.z * 0.016; // Поворот
-                    jet.rotation.z = -handRot.z * 1.5;   // РЕАЛИСТИЧНЫЙ КРЕН НА КРЫЛО ПРИ ВИРАЖЕ
-                    
-                    if (handRot.x < -0.05 || isAirborne) {
-                        jet.rotation.x = -handRot.x * 0.45; // Тангаж (взлет/пикирование)
-                        isAirborne = true;
-                    }
+            // 2. Логика штурвала и физика рук
+            if (rightHand.active && rightHand.grip) {
+                // Если зажат Grip — штурвал намертво примагничен к руке
+                isHoldingJoystick = true;
+                
+                // Переводим смещение руки пилота в наклон самолета
+                jet.pitch += (rightHand.y - 1.2) * 0.005 * timeDelta;
+                jet.roll = (rightHand.x - 0.3) * 2.5;
+                jet.yaw -= jet.roll * 0.0008 * timeDelta;
+
+                // Наклоняем модельку штурвала в кабине
+                virtualJoystick.pitch = (rightHand.y - 1.2) * 1.5;
+                virtualJoystick.roll = (rightHand.x - 0.3) * 1.5;
+
+                // Ограничители углов
+                jet.pitch = Math.max(-0.6, Math.min(0.6, jet.pitch));
+                
+                // Взлет
+                if (jet.speed > 20 && jet.pitch > 0.05 && !jet.airborne) {
+                    jet.airborne = true;
+                    document.getElementById('ui-status').innerText = 'В ПОЛЕТЕ';
+                    document.getElementById('ui-status').style.color = '#00ffff';
                 }
             } else {
-                // Если штурвал отпущен — самолет стабилизирует крен самостоятельно
-                jet.rotation.z *= 0.94;
-                if(isAirborne) jet.rotation.x *= 0.98;
+                // Штурвал отпущен — стабилизация
+                jet.roll *= 0.92;
+                virtualJoystick.pitch *= 0.85;
+                virtualJoystick.roll *= 0.85;
+                if (jet.airborne) jet.pitch *= 0.98;
             }
 
-            // Физика шасси и полета
-            if (isAirborne) {
-                jet.translateZ(-speed);
+            // Движение истребителя вперед по вектору тангажа и рыскания
+            jet.z -= jet.speed * Math.cos(jet.yaw) * timeDelta;
+            jet.x += jet.speed * Math.sin(jet.yaw) * timeDelta;
+            if (jet.airborne) {
+                jet.y += jet.speed * Math.sin(jet.pitch) * timeDelta;
             } else {
-                jet.position.z -= speed;
-                jet.position.y = 0.2;
-                jet.rotation.x = 0;
+                jet.y = 20; // Высота полосы
+                jet.pitch = 0;
             }
 
-            if (jet.position.y < 0.2) { jet.position.y = 0.2; isAirborne = false; }
+            // Проверка столкновения с землей
+            if (jet.y < 20) { jet.y = 20; jet.airborne = false; jet.pitch = 0; document.getElementById('ui-status').innerText = 'НА ПОЛОСЕ'; document.getElementById('ui-status').style.color = '#ffcc00';}
+
+            // Стрельба из пушек (Trigger)
+            if (rightHand.active && rightHand.grip && rightHand.trigger && Math.random() < 0.4) {
+                bullets.push({ x: jet.x - 12, y: jet.y - 2, z: jet.z - 20, vx: Math.sin(jet.yaw)*80, vy: Math.sin(jet.pitch)*80, vz: -80 });
+                bullets.push({ x: jet.x + 12, y: jet.y - 2, z: jet.z - 20, vx: Math.sin(jet.yaw)*80, vy: Math.sin(jet.pitch)*80, vz: -80 });
+            }
 
             // Полет снарядов пушки
             for (let i = bullets.length - 1; i >= 0; i--) {
-                bullets[i].position.z -= 6;
-                
-                for (let j = shaheds.length - 1; j >= 0; j--) {
-                    if (bullets[i].position.distanceTo(shaheds[j].position) < 25) {
-                        // Попадание! Уничтожаем Шахед
-                        scene.remove(shaheds[j]);
-                        shaheds.splice(j, 1);
-                        scene.remove(bullets[i]);
-                        bullets.splice(i, 1);
-                        score++;
-                        spawnShahed(); // Спавним новую волну
-                        break;
-                    }
-                }
+                let b = bullets[i];
+                b.z += b.vz * timeDelta;
+                b.x += b.vx * timeDelta;
+                b.y += b.vy * timeDelta;
 
-                if (bullets[i] && bullets[i].position.z < jet.position.z - 700) {
-                    scene.remove(bullets[i]);
-                    bullets.splice(i, 1);
-                }
+                // Столкновение с Шахедами
+                shaheds.forEach(s => {
+                    if (!s.active) return;
+                    let dx = b.x - s.x; let dy = b.y - s.y; let dz = b.z - s.z;
+                    let dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    if (dist < 35) {
+                        s.active = false;
+                        score += 100;
+                        bullets.splice(i, 1);
+                        // Эффект взрыва (частицы)
+                        for(let p=0; p<15; p++) particles.push({x: s.x, y: s.y, z: s.z, vx: (Math.random()-0.5)*10, vy: (Math.random()-0.5)*10, vz: (Math.random()-0.5)*10, life: 30});
+                        setTimeout(() => { Object.assign(s, spawnShahed()); }, 1500);
+                    }
+                });
+
+                if (b && Math.abs(b.z - jet.z) > 1200) bullets.splice(i, 1);
             }
 
-            // ЛОГИКА ШАХЕДОВ: ОНИ АТАКУЮТ ЗАВОДЫ
-            shaheds.forEach((shahed, index) => {
-                let data = shahed.userData;
+            // Движение частиц взрыва
+            for(let i = particles.length-1; i>=0; i--) {
+                particles[i].x += particles[i].vx; particles[i].y += particles[i].vy; particles[i].z += particles[i].vz;
+                particles[i].life--;
+                if(particles[i].life <= 0) particles.splice(i, 1);
+            }
+
+            // ЛОГИКА ШАХЕДОВ: ПИКИРОВАНИЕ НА ЗАВОДЫ
+            shaheds.forEach(s => {
+                if (!s.active) return;
                 
-                // Направление полета строго на выбранный завод
-                shahed.position.z += 0.6; // Скорость дрона
-                if (shahed.position.x < data.targetX) shahed.position.x += 0.15;
-                if (shahed.position.x > data.targetX) shahed.position.x -= 0.15;
-                
-                // Траектория пикирования (снижаются к заводу по мере приближения)
-                if (shahed.position.z > data.targetZ - 300 && shahed.position.y > 10) {
-                    shahed.position.y -= 0.4;
-                    shahed.rotation.x = 0.2; // Наклоняем нос вниз к цели
+                // Летят к своим целям
+                s.z += s.speed * timeDelta;
+                let dx = s.targetX - s.x;
+                s.x += Math.sign(dx) * 0.8 * timeDelta;
+
+                // Пикирование перед ударом
+                if (s.z > s.targetZ - 400 && s.y > 10) {
+                    s.y -= 1.8 * timeDelta;
+                    s.pitch = 0.4;
                 }
 
-                // ПРОВЕРКА УДАРА ПО ЗАВОДУ: если долетел до координат цели
-                if (shahed.position.z >= data.targetZ && Math.abs(shahed.position.x - data.targetX) < 30) {
-                    // Произошел взрыв на заводе!
-                    scene.remove(shahed);
-                    shaheds.splice(index, 1);
-                    spawnShahed(); // Летит следующий
+                // Удар по заводу!
+                if (s.z >= s.targetZ && Math.abs(s.x - s.targetX) < 40) {
+                    s.active = false;
+                    cityHealth -= 10;
+                    if (cityHealth < 0) cityHealth = 0;
+                    document.getElementById('ui-health').innerText = cityHealth + '%';
+                    if (cityHealth < 40) document.getElementById('ui-health').style.color = '#ff0055';
+                    
+                    // Переспавн новой волны камикадзе
+                    setTimeout(() => { Object.assign(s, spawnShahed()); }, 1000);
                 }
             });
 
-            renderer.render(scene, camera);
+            // Обновление плоского интерфейса на ПК
+            document.getElementById('ui-speed').innerText = Math.round(jet.speed * 20);
+            document.getElementById('ui-alt').innerText = Math.round(jet.y - 20);
+            document.getElementById('ui-score').innerText = score;
         }
 
-        window.onload = init;
+        // === ВЫСОКООПТИМИЗИРОВАННЫЙ СУПЕР-ДВИЖОК РЕНДЕРИНГА 3D ===
+        function renderScene(eyeMatrix, projectionMatrix, viewWidth, viewHeight, startX, startY) {
+            ctx.save();
+            // Настройка области рисования под конкретный глаз в VR
+            ctx.beginPath();
+            ctx.rect(startX, startY, viewWidth, viewHeight);
+            ctx.clip();
+
+            // Небо градиентом (Предрассветная зона операции)
+            let skyGrad = ctx.createLinearGradient(startX, startY, startX, startY + viewHeight);
+            skyGrad.addColorStop(0, '#0a0616');
+            skyGrad.addColorStop(0.6, '#130b24');
+            skyGrad.addColorStop(1, '#2c163a');
+            ctx.fillStyle = skyGrad;
+            ctx.fillRect(startX, startY, viewWidth, viewHeight);
+
+            let cx = startX + viewWidth / 2;
+            let cy = startY + viewHeight / 2;
+            let fov = 350;
+
+            // Функция проекции 3D точки на холст шлема
+            function project(x, y, z) {
+                // Матричный перенос относительно пилота
+                let rx = x - jet.x; let ry = y - jet.y; let rz = z - jet.z;
+                
+                // Применяем углы поворота истребителя
+                let m = getRotationMatrix(jet.pitch, jet.yaw, jet.roll);
+                let rotated = multiplyMatrixAndVector(m, [rx, ry, rz, 1]);
+
+                let rotX = rotated[0]; let rotY = rotated[1]; let rotZ = rotated[2];
+
+                if (rotZ >= 0) return null; // Объект позади
+                let scale = fov / -rotZ;
+                return { x: cx + rotX * scale, y: cy - rotY * scale, scale: scale };
+            }
+
+            // 1. РИСУЕМ ЗЕМЛЮ И ПОЛЯ
+            ctx.strokeStyle = '#1d261a';
+            ctx.lineWidth = 1;
+            let gridStep = 100;
+            let startZ = Math.floor(jet.z / gridStep) * gridStep;
+            
+            for (let z = 0; z < 15; z++) {
+                ctx.beginPath();
+                for (let x = -10; x <= 10; x++) {
+                    let pt = project(x * 150, 0, startZ - z * gridStep);
+                    if (pt) {
+                        if (x === -10) ctx.moveTo(pt.x, pt.y);
+                        else ctx.lineTo(pt.x, pt.y);
+                    }
+                }
+                ctx.stroke();
+            }
+
+            // 2. РИСУЕМ ВЗЛЕТНУЮ ПОЛОСУ (Бетонка)
+            ctx.fillStyle = '#1e1e24';
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            let rL1 = project(-15, 0, 0); let rR1 = project(15, 0, 0);
+            let rL2 = project(-15, 0, -900); let rR2 = project(15, 0, -900);
+            if (rL1 && rL2 && rR1 && rR2) {
+                ctx.beginPath(); ctx.moveTo(rL1.x, rL1.y); ctx.lineTo(rL2.x, rL2.y);
+                ctx.lineTo(rR2.x, rR2.y); ctx.lineTo(rR1.x, rR1.y); ctx.closePath();
+                ctx.fill(); ctx.stroke();
+            }
+
+            // 3. РИСУЕМ ЗАВОДЫ И ТЭЦ
+            factories.forEach(f => {
+                let p = project(f.x, f.y, f.z);
+                if (p) {
+                    let w = f.width * p.scale; let h = f.height * p.scale;
+                    ctx.fillStyle = '#44444a';
+                    ctx.strokeStyle = '#666';
+                    ctx.fillRect(p.x - w/2, p.y - h, w, h);
+                    ctx.strokeRect(p.x - w/2, p.y - h, w, h);
+
+                    // Труба ТЭЦ
+                    let pPipe = project(f.x + 20, f.y, f.z - 20);
+                    if (pPipe) {
+                        ctx.fillStyle = '#5a2a2a';
+                        ctx.fillRect(pPipe.x, pPipe.y - h*2.5, 6 * pPipe.scale, h*2.5);
+                        // Красный габаритный огонек ПВО
+                        ctx.fillStyle = '#ff0000';
+                        ctx.beginPath(); ctx.arc(pPipe.x + 3*pPipe.scale, pPipe.y - h*2.5, 3, 0, Math.PI*2); ctx.fill();
+                    }
+                }
+            });
+
+            // 4. РИСУЕМ РЕАЛИСТИЧНЫЕ ШАХЕДЫ-136
+            shaheds.forEach(s => {
+                if (!s.active) return;
+                let p = project(s.x, s.y, s.z);
+                if (p) {
+                    let size = 28 * p.scale;
+                    
+                    ctx.fillStyle = '#1a1b1f';
+                    ctx.strokeStyle = '#ff0044';
+                    ctx.lineWidth = 2;
+
+                    // КРЫЛО ДЕЛЬТА (Треугольник)
+                    ctx.beginPath();
+                    ctx.moveTo(p.x, p.y - size/3); // Нос
+                    ctx.lineTo(p.x - size, p.y + size/2); // Левый край крыла
+                    ctx.lineTo(p.x + size, p.y + size/2); // Правый край крыла
+                    ctx.closePath();
+                    ctx.fill(); ctx.stroke();
+
+                    // Вертикальные кили-стабилизаторы на законцовках крыльев
+                    ctx.fillStyle = '#2a2c30';
+                    ctx.fillRect(p.x - size, p.y, 2, -size/2);
+                    ctx.fillRect(p.x + size, p.y, 2, -size/2);
+                }
+            });
+
+            // 5. ТРАССЕРЫ АВИАПУШЕК
+            ctx.fillStyle = '#00ffff';
+            bullets.forEach(b => {
+                let p = project(b.x, b.y, b.z);
+                if (p) ctx.fillRect(p.x, p.y, 3, 15 * p.scale);
+            });
+
+            // ЧАСТИЦЫ ВЗРЫВОВ
+            ctx.fillStyle = '#ff9900';
+            particles.forEach(pt => {
+                let p = project(pt.x, pt.y, pt.z);
+                if(p) ctx.fillRect(p.x, p.y, 4, 4);
+            });
+
+            // 6. КАБИНА ПИЛОТА, РУКИ И ШТУРВАЛ (HUD КОКПИТ)
+            ctx.strokeStyle = '#00ff66';
+            ctx.lineWidth = 2;
+            
+            // Стекло фонаря кабины (авиа-сетка переплета)
+            ctx.beginPath();
+            ctx.arc(cx, cy, viewWidth * 0.4, 0, Math.PI, true);
+            ctx.stroke();
+
+            // ПРИБОРНАЯ ПАНЕЛЬ И ВЫСОКИЙ ШТУРВАЛ РУС
+            ctx.fillStyle = '#0f0f14';
+            ctx.fillRect(cx - 100, cy + viewHeight*0.2, 200, viewHeight*0.3);
+            ctx.strokeRect(cx - 100, cy + viewHeight*0.2, 200, viewHeight*0.3);
+
+            // Отрисовка Штурвала РУС (Красный набалдашник рычага)
+            let stickX = cx + virtualJoystick.roll * 40;
+            let stickY = cy + viewHeight*0.22 + virtualJoystick.pitch * 30;
+            ctx.strokeStyle = '#555';
+            ctx.lineWidth = 6;
+            ctx.beginPath(); ctx.moveTo(cx, cy + viewHeight*0.3); ctx.lineTo(stickX, stickY); ctx.stroke();
+            
+            ctx.fillStyle = rightHand.grip ? '#00ff66' : '#ff0033'; // Зеленый если схватили руками, красный если пустой
+            ctx.beginPath(); ctx.arc(stickX, stickY, 12, 0, Math.PI*2); ctx.fill();
+
+            // МОДЕЛЬ НАСТОЯЩИХ VR-РУК (Правая рука трекается в кабине)
+            if (rightHand.active) {
+                let rx = cx - 120 + (rightHand.x * 200);
+                let ry = cy + 100 - (rightHand.y * 150);
+                ctx.fillStyle = '#00ffff';
+                ctx.beginPath(); ctx.arc(rx, ry, 15, 0, Math.PI*2); ctx.fill(); // Перчатка пилота
+                ctx.fillStyle = '#fff';
+                ctx.font = '10px monospace';
+                ctx.fillText("РУКА ПИЛОТА", rx - 30, ry - 20);
+            }
+
+            // ИЛС АВИАПРИЦЕЛ (Индикатор на лобовом стекле)
+            ctx.strokeStyle = '#00ff66';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.arc(cx, cy, 25, 0, Math.PI*2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(cx - 35, cy); ctx.lineTo(cx - 10, cy); ctx.moveTo(cx + 10, cy); ctx.lineTo(cx + 35, cy); ctx.stroke();
+
+            ctx.restore();
+        }
+
+        // === ГЛАВНЫЕ ЦИКЛЫ ОБРАБОТКИ КАДРОВ VR И ПК ===
+        let lastTime = performance.now();
+        
+        // Цикл для ПК (Запасной)
+        function loop(now) {
+            let dt = (now - lastTime) / 16.6;
+            lastTime = now;
+            updateGame(dt);
+
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            renderScene(null, null, canvas.width, canvas.height, 0, 0);
+
+            if (!xrSession) window.requestAnimationFrame(loop);
+        }
+        window.requestAnimationFrame(loop);
+
+        // Полноценный цикл для Meta Quest 3 (Два глаза WebXR)
+        function onXRFrame(time, frame) {
+            let session = frame.session;
+            session.requestAnimationFrame(onXRFrame);
+
+            let pose = frame.getViewerPose(xrRefSpace);
+            if (pose) {
+                let glLayer = session.renderState.baseLayer;
+                
+                // Считываем данные рук и кнопок контроллеров Quest 3
+                let inputSources = session.inputSources;
+                rightHand.active = false;
+                
+                for (let inputSource of inputSources) {
+                    if (inputSource.handedness === 'right' && inputSource.gamepad) {
+                        rightHand.active = true;
+                        
+                        // Положение контроллера в пространстве кабины
+                        let handPose = frame.getPose(inputSource.targetRaySpace, xrRefSpace);
+                        if (handPose) {
+                            rightHand.x = handPose.transform.position.x * 2.5;
+                            rightHand.y = handPose.transform.position.y * 2.5;
+                        }
+                        
+                        // Кнопки: Grip (боковая) и Trigger (передний курок)
+                        rightHand.grip = inputSource.gamepad.buttons[1].pressed;
+                        rightHand.trigger = inputSource.gamepad.buttons[0].pressed;
+                    }
+                }
+
+                // Логика игры
+                let now = performance.now();
+                let dt = (now - lastTime) / 16.6;
+                lastTime = now;
+                updateGame(dt > 2 ? 1 : dt); // Защита от микрофризов
+
+                // Рендерим картинку отдельно для левого и правого глаза шлема
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                let viewWidth = canvas.width / 2;
+                // Левый глаз
+                renderScene(null, null, viewWidth, canvas.height, 0, 0);
+                // Правый глаз
+                renderScene(null, null, viewWidth, canvas.height, viewWidth, 0);
+            }
+        }
+
+        // Эмуляция мышки для тестов на ПК
+        let mouseX = 0, mouseY = 0;
+        window.addEventListener('mousemove', (e) => {
+            mouseX = (e.clientX / canvas.width) - 0.5;
+            mouseY = (e.clientY / canvas.height) - 0.5;
+            // На ПК мышка автоматически заменяет контроллер
+            rightHand.active = true; rightHand.grip = true;
+            rightHand.x = mouseX * 0.8 + 0.3; rightHand.y = -mouseY * 0.8 + 1.2;
+        });
+        window.addEventListener('mousedown', () => { rightHand.trigger = true; });
+        window.addEventListener('mouseup', () => { rightHand.trigger = false; });
     </script>
 </body>
 </html>
