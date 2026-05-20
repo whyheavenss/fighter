@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>VR Fighter Pilot AAA — Гром Каньона 2.0</title>
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://unpkg.com/aframe-extras.loaders@1.2.0/dist/aframe-extras.loaders.min.js"></script>
+    <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
+  </head>
+  <body>
+
+    <script>
+      let score = 0;
+      let speed = 0.45; // Увеличили скорость
+      let enemies = [];
+      let isGameOver = false;
+
+      // Глобальный компонент управления
+      AFRAME.registerComponent('fighter-master', {
+        init: function () {
+          this.scoreText = document.querySelector('#score-ui');
+          this.healthText = document.querySelector('#health-ui');
+          this.player = document.querySelector('#fighter-jet');
+          this.camera = document.querySelector('#pilot-cam');
+          this.joystick = document.querySelector('#pilot-joystick');
+          this.handRight = document.querySelector('#pilot-hand-right');
+          this.health = 100;
+          
+          // Логика стрельбы
+          const triggerShoot = () => { if (!isGameOver) this.shoot(); };
+          window.addEventListener('click', triggerShoot);
+          window.addEventListener('triggerdown', triggerShoot); // VR Trigger
+
+          // Спавн детализированных врагов
+          for (let i = 0; i < 6; i++) { this.spawnEnemy(i); }
+        },
+
+        tick: function (time, timeDelta) {
+          if (isGameOver) return;
+          
+          let currentPos = this.player.getAttribute('position');
+          currentPos.z -= speed * (timeDelta / 16.6); 
+          this.player.setAttribute('position', currentPos);
+
+          // Управление: Плавное следование за взглядом и наклон самолета
+          let camRot = this.camera.getAttribute('rotation');
+          let currentRot = this.player.getAttribute('rotation');
+
+          // Плавное следование
+          currentRot.z = -camRot.y * 1.8; // Наклон при повороте (Банкаж)
+          currentRot.x = camRot.x;        // Тангаж
+          currentRot.y = camRot.y;        // Рыскание
+          this.player.setAttribute('rotation', currentRot);
+
+          // СИНХРОНИЗАЦИЯ РУК И ДЖОЙСТИКА
+          // Модель джойстика наклоняется вслед за наклоном самолета
+          this.joystick.setAttribute('rotation', { x: -currentRot.x, y: 0, z: -currentRot.z });
+          // Рука пилота привязана к джойстику (или VR контроллеру)
+          // На ПК мы эмулируем: рука следует за взглядом, чтобы держаться у джойстика
+          this.handRight.setAttribute('position', { 
+            x: 0.15 + (camRot.y * -0.005), 
+            y: -0.3 + (camRot.x * 0.002), 
+            z: -0.2 
+          });
+
+          // Проверка попаданий по игроку и движение врагов
+          enemies.forEach(enemy => {
+            let enemyPos = enemy.getAttribute('position');
+            // Враг следует за игроком
+            enemyPos.z += (speed * 0.8) * (timeDelta / 16.6);
+            enemyPos.x += (camRot.y * 0.05); // Легкий доворот на игрока
+            enemy.setAttribute('position', enemyPos);
+
+            // Если улетел — вернуть
+            if (enemyPos.z > currentPos.z + 10) { this.spawnEnemy(enemies.indexOf(enemy), true); }
+          });
+        },
+
+        shoot: function () {
+          let playerPos = this.player.getAttribute('position');
+          let currentRot = this.player.getAttribute('rotation');
+          
+          // Создаем детализированные лазерные пули (светящиеся цилиндры)
+          const createLaser = (offsetX) => {
+            let laser = document.createElement('a-cylinder');
+            laser.setAttribute('radius', 0.04);
+            laser.setAttribute('height', 8);
+            laser.setAttribute('material', { color: '#ffff00', emissive: '#ffff00', shader: 'flat', opacity: 0.8 });
+            laser.setAttribute('position', { x: playerPos.x + offsetX, y: playerPos.y, z: playerPos.z - 2 });
+            laser.setAttribute('rotation', { x: 90, y: currentRot.y, z: 0 });
+            laser.setAttribute('animation', { property: 'position', to: `${playerPos.x + offsetX} ${playerPos.y} ${playerPos.z - 120}`, dur: 400, easing: 'linear' });
+            document.querySelector('a-scene').appendChild(laser);
+            setTimeout(() => { laser.remove(); }, 400);
+          };
+
+          createLaser(-1.2); createLaser(1.2); // Стрельба из двух крыльев
+
+          // Raycast: Проверка попаданий по врагам
+          let reticleRay = document.querySelector('#hud-aim').components.raycaster;
+          let intersections = reticleRay.getIntersection(document.querySelectorAll('.target'));
+          
+          if (intersections) {
+            let hitTarget = intersections.el;
+            hitTarget.setAttribute('visible', false);
+            hitTarget.classList.remove('target');
+            
+            // Взрыв (Модель взрыва)
+            let explosion = document.createElement('a-entity');
+            explosion.setAttribute('gltf-model', 'https://cdn.aframe.io/examples/ar/explosion.gltf'); // Базовая модель взрыва
+            explosion.setAttribute('position', hitTarget.getAttribute('position'));
+            explosion.setAttribute('scale', '2 2 2');
+            explosion.setAttribute('animation-mixer', {});
+            document.querySelector('a-scene').appendChild(explosion);
+
+            score += 100;
+            this.scoreText.setAttribute('value', score);
+          }
+        },
+
+        spawnEnemy: function (index, replace = false) {
+          let pPos = this.player.getAttribute('position') || {x:0, y:0, z:0};
+          let enemy;
+
+          if (replace) { enemy = enemies[index]; } 
+          else {
+            enemy = document.createElement('a-entity');
+            // ЗАГРУЗКА ДЕТАЛИЗИРОВАННОЙ МОДЕЛИ ВРАЖЕСКОГО ИСТРЕБИТЕЛЯ
+            enemy.setAttribute('gltf-model', 'https://raw.githubusercontent.com/polyhaven/models/master/props/f-16_fighting_falcon/f-16_fighting_falcon.gltf'); 
+            enemy.setAttribute('scale', '1.5 1.5 1.5'); // Крупная модель
+            document.querySelector('a-scene').appendChild(enemy);
+            enemies.push(enemy);
+          }
+
+          enemy.setAttribute('position', { x: (Math.random()*120)-60, y: (Math.random()*40)+5, z: pPos.z - (80 + Math.random()*70) });
+          enemy.setAttribute('rotation', { x: 90, y: 0, z: 0 });
+          enemy.setAttribute('visible', true);
+          enemy.classList.add('target');
+        }
+      });
+    </script>
+
+    <a-scene fighter-master renderer="colorManagement: true; physicallyCorrectLights: true">
+      
+      <a-assets>
+        <img id="sky-tex" src="https://raw.githubusercontent.com/aframevr/aframe/master/examples/showcase/composite/images/sky.jpg">
+        <img id="ground-tex" src="https://raw.githubusercontent.com/polyhaven/models/master/textures/rough_sandstone_terrain/rough_sandstone_terrain_01_diff_2k.jpg">
+      </assets>
+
+      <a-sky src="#sky-tex" rotation="0 -90 0"></a-sky>
+
+      <a-entity environment="preset: contact; groundTexture: dirt; skyType: atmosphere; horizonColor: #ffcc99; dressing: mountains; dressingColor: #a0522d; dressingAmount: 12"></a-entity>
+      <a-grid position="0 0 0" width="5000" height="5000" material="src: #ground-tex; repeat: 50 50; opacity: 0.8"></a-grid>
+
+      <a-entity light="type: ambient; color: #BBB"></a-entity>
+      <a-entity light="type: directional; color: #FFF; intensity: 0.8" position="-1 1 1"></a-entity>
+
+      <a-entity id="fighter-jet" position="0 25 0">
+        
+        <a-camera id="pilot-cam" look-controls wasd-controls-enabled="false" near="0.05">
+          
+          <a-sphere radius="2.5" position="0 0.5 0" material="color: #66ccff; opacity: 0.05; transparent: true; shader: physicallyCorrectLights"></a-sphere>
+          
+          <a-box position="0 -0.8 -0.6" width="1.2" height="0.6" depth="0.4" color="#1a1a24">
+            <a-plane position="0 0.2 0.21" width="0.4" height="0.1" color="#001100"></a-plane>
+          </a-box>
+
+          <a-entity id="hud-display" position="0 0 -1.5">
+            <a-text id="score-ui" value="0" position="-0.4 0.35 0" color="#00ff00" width="1.5" font="monoid"></a-text>
+            <a-text id="health-ui" value="100%" position="0.3 0.35 0" color="#00ff00" width="1.5" font="monoid"></a-text>
+            <a-text value="WEAPON: 2x LASER\nMODE: FLIGHT" position="-0.4 -0.3 0" color="#00ff00" width="1" font="monoid"></a-text>
+            
+            <a-entity id="hud-aim" raycaster="objects: .target; far: 100" position="0 0 0">
+              <a-ring radius-inner="0.06" radius-outer="0.08" color="#ffcc00" material="shader:flat; opacity:0.8; transparent:true"></a-ring>
+              <a-circle radius="0.01" color="#ffcc00" material="shader:flat"></a-circle>
+            </a-entity>
+          </a-entity>
+
+          <a-entity id="pilot-controls" position="0 -0.25 -0.3">
+            
+            <a-entity id="pilot-joystick" gltf-model="https://raw.githubusercontent.com/polyhaven/models/master/props/arcade_joystick/arcade_joystick.gltf" scale="0.1 0.1 0.1" position="0 0 0" rotation="0 0 0"></a-entity>
+            
+            <a-entity id="pilot-hand-right" gltf-model="https://raw.githubusercontent.com/polyhaven/models/master/props/hand_sculpture/hand_sculpture.gltf" position="0.15 -0.3 -0.2" scale="0.02 0.02 0.02" rotation="-70 -90 0"></a-entity>
+          
+          </a-entity>
+
+        </a-camera>
+
+        <a-entity gltf-model="https://raw.githubusercontent.com/polyhaven/models/master/props/f-16_fighting_falcon/f-16_fighting_falcon.gltf" scale="0.1 0.1 0.1" position="-2.5 0 -2"></a-entity>
+        <a-entity gltf-model="https://raw.githubusercontent.com/polyhaven/models/master/props/f-16_fighting_falcon/f-16_fighting_falcon.gltf" scale="0.1 0.1 0.1" position="2.5 0 -2" rotation="0 0 180"></a-entity>
+        
+      </a-entity>
+
+      <a-entity oculus-touch-controls="hand: right"></a-entity>
+      <a-entity oculus-touch-controls="hand: left"></a-entity>
+
+    </a-scene>
+  </body>
+</html>
